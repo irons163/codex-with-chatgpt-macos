@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+.DS_Store
+dist/
+uploads/
+.env
+.env.*
