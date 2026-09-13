@@ -45,9 +45,9 @@ c2c --workspace /path/to/project
 c2c --workspace /path/to/project --app /Applications/ChatGPT.app
 ```
 
-注入面板可另外選擇工作目錄，再交給 Codex 桌面版的原生資料夾開啟機制，建立或切換至
-真正的本機專案。新對話會以該目錄作為工作目錄，依需求讀取磁碟上的最新檔案，不會建立
-或上傳 Markdown 快照。程序保持前景執行以維持 CDP 連線，按 Ctrl-C 會移除注入介面並結束。
+注入面板可另外選擇工作目錄；每次按「附加目前專案檔案」都會重新掃描磁碟，再透過 CDP
+把目前的原始程式碼與文字檔附加到 ChatGPT／Quick Chat。它不會產生合併 Markdown，
+但仍屬於當次附件，不是賦予雲端 ChatGPT 本機檔案工具。程序保持前景執行以維持 CDP 連線。
 
 ## 進階：MCP 橋接
 
@@ -92,9 +92,9 @@ c2c entry --app /Applications/ChatGPT.app --debug-port 57330
 `entry` 會以 Chrome DevTools Protocol 連上 Codex/ChatGPT 桌面版（與 theme-switcher 同款的 attach 方式：先沿用現有 debug 埠，否則以 `--remote-debugging-port` 重新啟動 app），在視窗右下注入一個可拖曳的浮動按鈕，提供兩個動作：
 
 - **選擇工作目錄**：使用 macOS 原生目錄選擇視窗切換目前工作區。
-- **以本機專案開啟**：把選定資料夾交給 Codex 桌面版的原生 `public.folder` handler，建立或切換本機專案；接著建立的新對話會直接以該資料夾為工作目錄。
+- **附加目前專案檔案**：先開啟 ChatGPT／Quick Chat，再重新掃描工作目錄，套用 ignore 與敏感檔案排除規則後，以 CDP 設定 ChatGPT 的附件輸入。預設最多 40 個檔案、單檔 1 MiB、合計 8 MiB。
 
-CDP 只注入浮動面板與把按鈕事件送回 Swift；不會把檔案內容塞進頁面，也不會模擬附件。實際檔案存取由 Codex 本機工作階段處理，能力與權限以輸入框顯示的原生權限模式為準。一般雲端 ChatGPT 對話不會因此取得本機工具。Ctrl-C 或程序離開時會自動移除注入面板。同一時間只會有一個目錄選擇視窗。
+目前桌面 App 的「檔案和資料夾」會開啟 Electron 原生 `NSOpenPanel`，不會觸發 Chromium 的 `Page.fileChooserOpened`。此實作不模擬拖放，而是找出 ChatGPT／Quick Chat composer 的隱藏檔案輸入，再呼叫 CDP `DOM.setFileInputFiles` 指定原始檔案路徑；找不到 ChatGPT 附件輸入時會停止並提示先開啟 Quick Chat，不會退回附加到 Codex 主輸入框。Swift 端會排除 `.gitignore`、`.c2cignore`、`.env`、金鑰、憑證、`.git`、build cache 與 symlink。檔案變更後再按一次即可附加新版。Ctrl-C 或程序離開時會移除面板。
 
 ```sh
 c2c session set --mode project --project-url 'https://chatgpt.com/g/g-p-example/project'

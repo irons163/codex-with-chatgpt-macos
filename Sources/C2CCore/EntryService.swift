@@ -1,17 +1,57 @@
 import Foundation
 import Darwin
 
-/// Injects a local-workspace panel into the ChatGPT desktop app over CDP.
-/// The panel hands a user-selected folder to the app's native local-project
-/// handler, so subsequent Codex tasks use the live directory as their cwd.
+/// Injects a workspace attachment panel into ChatGPT over CDP. Each click
+/// rescans the selected directory and sets the current safe source files on
+/// ChatGPT's file input. This is a refreshed attachment batch, not filesystem
+/// tooling inside the model runtime.
 public final class EntryService {
+    /// Selects ChatGPT's general-purpose file input nearest to the rightmost
+    /// visible composer. In the Codex desktop layout that is Quick Chat, while
+    /// a standalone ChatGPT window simply has one visible composer.
+    static let chatGPTFileInputExpression = """
+    (() => {
+      const visibleEditors = Array.from(document.querySelectorAll(
+        '[contenteditable="true"][role="textbox"], textarea[role="textbox"]'
+      )).filter(element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 80 && rect.height > 10 && rect.bottom > 0 && rect.right > 0 &&
+          rect.top < innerHeight && rect.left < innerWidth;
+      }).sort((left, right) => {
+        const a = left.getBoundingClientRect();
+        const b = right.getBoundingClientRect();
+        const horizontal = (b.left + b.width / 2) - (a.left + a.width / 2);
+        return horizontal !== 0 ? horizontal : b.bottom - a.bottom;
+      });
+      if (!visibleEditors.length) return null;
+
+      const inputs = Array.from(document.querySelectorAll('input[type="file"][multiple]'))
+        .filter(input => !input.disabled && !input.hasAttribute('accept'));
+      if (!inputs.length) return null;
+
+      const editor = visibleEditors[0];
+      function treeDistance(left, right) {
+        const ancestors = new Map();
+        let node = left, distance = 0;
+        while (node) { ancestors.set(node, distance++); node = node.parentElement; }
+        node = right; distance = 0;
+        while (node) {
+          if (ancestors.has(node)) return distance + ancestors.get(node);
+          distance++; node = node.parentElement;
+        }
+        return Number.MAX_SAFE_INTEGER;
+      }
+      inputs.sort((left, right) => treeDistance(left, editor) - treeDistance(right, editor));
+      return inputs[0];
+    })()
+    """
+
     public private(set) var workspace: Workspace
     private let appOverride: URL?
     private let preferredPort: Int?
     private let log: (String) -> Void
     private let lock = NSLock()
     private var sessions: [String: CDPSession] = [:]
-    private var resolvedApp: URL?
     private var pickerBusy = false
     private var stopped = false
 
@@ -33,7 +73,6 @@ public final class EntryService {
 
     public func run() async throws {
         let app = try ChatGPTApp.locate(override: appOverride?.path)
-        withLock { resolvedApp = app }
         log("Using app: \(app.path)")
         let port = try await ChatGPTApp.ensureDebugPort(app: app, preferred: preferredPort, log: log)
         let source = EntryPanel.installScript(workspaceName: workspace.name)
@@ -86,7 +125,7 @@ public final class EntryService {
         }
         for (id, session) in withLock({ Array(sessions) }) {
             guard session.isConnected else { continue }
-            let present = ((try? await session.evaluateValue("window[\"\(EntryPanel.marker)\"] === true", timeout: 5)) as? Bool)
+            let present = ((try? await session.evaluateValue(EntryPanel.presenceScript, timeout: 5)) as? Bool)
             if present != true {
                 do {
                     try await session.evaluate(source)
@@ -105,8 +144,8 @@ public final class EntryService {
         switch payload["action"] as? String {
         case "choose-workspace":
             Task { [weak self] in await self?.performChooseWorkspace(session: session) }
-        case "open-workspace":
-            Task { [weak self] in await self?.performOpenWorkspace(session: session) }
+        case "attach-workspace-files":
+            Task { [weak self] in await self?.performAttachWorkspaceFiles(session: session) }
         default:
             Task { await respond(session, ["ok": false, "error": "Unknown action"]) }
         }
@@ -146,19 +185,109 @@ public final class EntryService {
         }
     }
 
-    private func performOpenWorkspace(session: CDPSession) async {
-        guard let app = withLock({ resolvedApp }) else {
-            await respond(session, ["ok": false, "error": "找不到目前連線的 Codex App。"])
-            return
+    struct AttachmentBatch {
+        let files: [URL]
+        let candidateCount: Int
+        let truncated: Bool
+    }
+
+    func workspaceAttachmentBatch(maxFiles: Int = 40, maxFileBytes: Int = 1 * 1024 * 1024, maxTotalBytes: Int = 8 * 1024 * 1024) throws -> AttachmentBatch {
+        guard maxFiles > 0, maxFileBytes > 0, maxTotalBytes > 0 else {
+            throw C2CError("附件數量與容量上限必須大於零。")
         }
+        let selected = withLock { workspace }
+        let listing = try selected.listDirectory(".", depth: 4, limit: 1000)
+        let entries = listing["entries"] as? [[String: Any]] ?? []
+        let preferredNames = [
+            "AGENTS.md", "README.md", "README", "Package.swift", "package.json",
+            "Cargo.toml", "pyproject.toml", "Gemfile", "Podfile", "Makefile"
+        ]
+        let textExtensions: Set<String> = [
+            "swift", "m", "mm", "h", "c", "cc", "cpp", "rs", "go", "py", "rb",
+            "js", "jsx", "ts", "tsx", "java", "kt", "kts", "cs", "php", "sh",
+            "zsh", "fish", "md", "txt", "json", "yaml", "yml", "toml", "xml",
+            "html", "css", "scss", "sql", "graphql", "proto", "gradle", "plist",
+            "strings", "pbxproj", "xcconfig"
+        ]
+        let candidates = entries.compactMap { entry -> (path: String, size: Int)? in
+            guard entry["type"] as? String == "file",
+                  let path = entry["path"] as? String,
+                  let size = entry["sizeBytes"] as? Int,
+                  size >= 0, size <= maxFileBytes else { return nil }
+            let url = URL(fileURLWithPath: path)
+            guard preferredNames.contains(url.lastPathComponent) || textExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+            return (path, size)
+        }.sorted { lhs, rhs in
+            let left = preferredNames.firstIndex(of: URL(fileURLWithPath: lhs.path).lastPathComponent) ?? preferredNames.count
+            let right = preferredNames.firstIndex(of: URL(fileURLWithPath: rhs.path).lastPathComponent) ?? preferredNames.count
+            return left == right ? lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending : left < right
+        }
+
+        var files: [URL] = []
+        var totalBytes = 0
+        var skippedForLimit = false
+        for candidate in candidates {
+            guard files.count < maxFiles,
+                  candidate.size <= maxTotalBytes - totalBytes else {
+                skippedForLimit = true
+                continue
+            }
+            let resolved = try selected.resolve(candidate.path)
+            let url = URL(fileURLWithPath: resolved.absolute)
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+                  values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            files.append(url)
+            totalBytes += candidate.size
+        }
+        return AttachmentBatch(
+            files: files,
+            candidateCount: candidates.count,
+            truncated: skippedForLimit || listing["hasMore"] as? Bool == true
+        )
+    }
+
+    private func performAttachWorkspaceFiles(session: CDPSession) async {
         do {
             let selected = withLock { workspace }
-            try ChatGPTApp.openWorkspace(app: app, workspace: selected)
-            log("Opened live local project for \(selected.name).")
-            await respond(session, ["ok": true, "action": "open-workspace", "workspace": selected.name])
+            let batch = try workspaceAttachmentBatch()
+            guard !batch.files.isEmpty else { throw C2CError("工作目錄中沒有可附加的文字或程式碼檔案。") }
+            try await attachToChatGPT(batch.files, session: session)
+            log("Attached \(batch.files.count) current workspace file(s) to ChatGPT for \(selected.name).")
+            await respond(session, [
+                "ok": true,
+                "action": "attach-workspace-files",
+                "workspace": selected.name,
+                "count": batch.files.count,
+                "candidateCount": batch.candidateCount,
+                "truncated": batch.truncated
+            ])
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
         }
+    }
+
+    private func attachToChatGPT(_ files: [URL], session: CDPSession) async throws {
+        let evaluation = try await session.send("Runtime.evaluate", [
+            "expression": Self.chatGPTFileInputExpression,
+            "returnByValue": false,
+            "awaitPromise": false
+        ], timeout: 5)
+        if let details = evaluation["exceptionDetails"] as? [String: Any] {
+            throw C2CError((details["text"] as? String) ?? "無法尋找 ChatGPT 附件輸入。")
+        }
+        guard let remoteObject = evaluation["result"] as? [String: Any],
+              let objectID = remoteObject["objectId"] as? String,
+              remoteObject["subtype"] as? String != "null" else {
+            throw C2CError("找不到 ChatGPT／Quick Chat 的附件輸入。請先開啟 Quick Chat，再按一次。")
+        }
+        defer {
+            Task { _ = try? await session.send("Runtime.releaseObject", ["objectId": objectID], timeout: 3) }
+        }
+        _ = try await session.send("DOM.setFileInputFiles", [
+            "files": files.map(\.path),
+            "objectId": objectID
+        ], timeout: 15)
+        try await Task.sleep(nanoseconds: 500_000_000)
     }
 
     private func respond(_ session: CDPSession, _ payload: [String: Any]) async {

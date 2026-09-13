@@ -93,7 +93,7 @@ struct Arguments {
       pair | unpair              Create a pairing code or revoke authorization
       workspace                  Inspect the current workspace
       entry [--app PATH] [--debug-port N]
-                                 Open a live Codex project from the CDP panel
+                                 Attach current workspace files over CDP
       logs [--lines N]            Show private bridge logs
       session get|set|clear       Remember ChatGPT project and conversation
       prefs get|set               Remember developer mode and setup preferences
@@ -185,7 +185,7 @@ struct Arguments {
             signal(SIGPIPE, SIG_IGN); signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
             let service = EntryService(workspace: workspace, appOverride: appOverride.map { URL(fileURLWithPath: $0) }, preferredPort: preferredPort, log: { print($0); fflush(stdout) })
             let serviceTask = Task { try await service.run() }
-            print("Live workspace entry running for \(workspace.name). Press Ctrl-C to stop.")
+            print("Workspace attachment entry running for \(workspace.name). Press Ctrl-C to stop.")
             fflush(stdout)
             let outcome: Result<Void, Error> = await withCheckedContinuation { (continuation: CheckedContinuation<Result<Void, Error>, Never>) in
                 final class EntryShutdown: @unchecked Sendable {

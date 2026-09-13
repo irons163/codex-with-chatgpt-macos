@@ -2,9 +2,14 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
+    public static let version = "workspace-attachments-v2"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
+
+    public static var presenceScript: String {
+        "window[\"\(marker)\"] === \"\(version)\" && document.getElementById(\"\(hostID)\") !== null"
+    }
 
     static func jsonLiteral(_ value: String) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
@@ -17,10 +22,13 @@ public enum EntryPanel {
         return """
         (function () {
           var MARKER = "\(marker)";
+          var VERSION = "\(version)";
           var BINDING = "\(bindingName)";
           var RESULT = "\(resultFunction)";
-          if (window[MARKER]) return "already";
-          window[MARKER] = true;
+          var previousHost = document.getElementById("\(hostID)");
+          if (window[MARKER] === VERSION && previousHost) return "already";
+          if (previousHost) previousHost.remove();
+          window[MARKER] = VERSION;
           var WORKSPACE = \(workspace);
           var host = document.createElement("div");
           host.id = "\(hostID)";
@@ -40,24 +48,24 @@ public enum EntryPanel {
             ".panel button{display:block;width:100%;margin:0 0 6px;padding:8px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.16);background:rgba(255,255,255,0.08);color:#eee;font-size:12px;text-align:left;cursor:pointer}",
             ".panel button:hover{background:rgba(255,255,255,0.16)}",
             ".status{min-height:14px;margin:2px 0 0;font-size:10px;color:#9be29b}",
-            ".toast{position:absolute;right:0;bottom:92px;max-width:280px;padding:8px 10px;border-radius:8px;background:rgba(18,18,20,0.96);border:1px solid rgba(255,255,255,0.14);color:#ddd;font-size:11px;display:none}",
+            ".toast{position:absolute;right:0;bottom:92px;width:252px;padding:8px 10px;border-radius:8px;background:rgba(18,18,20,0.96);border:1px solid rgba(255,255,255,0.14);color:#ddd;font-size:11px;line-height:1.4;display:none}",
             ".toast.show{display:block}"
           ].join("");
           shadow.appendChild(style);
           var bubble = document.createElement("div");
           bubble.className = "bubble";
-          bubble.title = "Codex 即時工作目錄";
+          bubble.title = "ChatGPT 工作目錄附件";
           bubble.innerHTML = '<svg viewBox="0 0 24 24"><path d="M10 4l2 2h8a2 2 0 012 2v9a3 3 0 01-3 3H5a3 3 0 01-3-3V7a3 3 0 013-3h5zm-5 4v9a1 1 0 001 1h13a1 1 0 001-1V8H5z"/></svg>';
           var panel = document.createElement("div");
           panel.className = "panel";
           var heading = document.createElement("h1");
-          heading.textContent = "Codex 即時工作目錄";
+          heading.textContent = "ChatGPT 工作目錄附件";
           var hint = document.createElement("p");
           hint.textContent = "工作區：" + WORKSPACE;
           var chooseButton = document.createElement("button");
           chooseButton.textContent = "選擇工作目錄…";
-          var openButton = document.createElement("button");
-          openButton.textContent = "以本機專案開啟";
+          var attachButton = document.createElement("button");
+          attachButton.textContent = "附加目前專案檔案";
           var status = document.createElement("div");
           status.className = "status";
           var toast = document.createElement("div");
@@ -65,7 +73,7 @@ public enum EntryPanel {
           panel.appendChild(heading);
           panel.appendChild(hint);
           panel.appendChild(chooseButton);
-          panel.appendChild(openButton);
+          panel.appendChild(attachButton);
           panel.appendChild(status);
           shadow.appendChild(bubble);
           shadow.appendChild(panel);
@@ -89,7 +97,7 @@ public enum EntryPanel {
             catch (error) { setStatus(""); showToast("無法呼叫 c2c：" + error); }
           }
           chooseButton.addEventListener("click", function () { callNative("choose-workspace"); });
-          openButton.addEventListener("click", function () { callNative("open-workspace"); });
+          attachButton.addEventListener("click", function () { callNative("attach-workspace-files"); });
           window[RESULT] = function (payloadText) {
             var payload = null;
             try { payload = JSON.parse(String(payloadText)); } catch (error) {}
@@ -100,9 +108,12 @@ public enum EntryPanel {
                 hint.textContent = "工作區：" + WORKSPACE;
                 setStatus("已選擇工作目錄");
                 showToast("工作目錄已切換為「" + WORKSPACE + "」。");
-              } else if (payload.action === "open-workspace") {
-                setStatus("已開啟即時專案");
-                showToast("已切換到「" + (payload.workspace || WORKSPACE) + "」；新對話會直接讀取最新檔案。");
+              } else if (payload.action === "attach-workspace-files") {
+                var count = payload.count || 0;
+                setStatus("已附加到 ChatGPT：" + count + " 個檔案");
+                showToast(payload.truncated
+                  ? "已附加 " + count + " 個檔案到 ChatGPT／Quick Chat；其餘因數量或大小上限略過。"
+                  : "已附加 " + count + " 個檔案到 ChatGPT／Quick Chat。");
               }
             } else if (payload.cancelled === true) {
               setStatus(""); showToast("已取消。");

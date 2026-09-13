@@ -37,9 +37,8 @@ public enum CDPDebug {
         }
     }
 
-    /// Only the main chat window: the bare index document. Utility surfaces
-    /// (avatar overlay, global dictation, …) pass ?initialRoute= and are
-    /// ephemeral windows that would kill sessions mid-injection.
+    /// Only the main renderer. Quick Chat's visible UI is mounted here too; its
+    /// separate `quick-chat-prewarm` target is an empty utility renderer.
     public static func isAppPageURL(_ url: String) -> Bool {
         url == "app://-/index.html"
     }
@@ -338,24 +337,6 @@ public enum ChatGPTApp {
         ]
         let result = try runCommand("/usr/bin/open", [app.path] + arguments, timeout: 20)
         guard result.code == 0 else { throw C2CError("Cannot launch \(app.lastPathComponent): \(result.output)") }
-    }
-
-    static func workspaceOpenArguments(app: URL, workspace: Workspace) -> [String] {
-        ["-a", app.path, workspace.root]
-    }
-
-    /// Sends a folder through the desktop app's native `public.folder` open
-    /// handler. Codex then creates or selects a local project whose tasks use
-    /// that folder as their live working directory.
-    public static func openWorkspace(app: URL, workspace: Workspace) throws {
-        let result = try runCommand(
-            "/usr/bin/open",
-            workspaceOpenArguments(app: app, workspace: workspace),
-            timeout: 20
-        )
-        guard result.code == 0 else {
-            throw C2CError("Cannot open \(workspace.name) in \(app.lastPathComponent): \(result.output)")
-        }
     }
 
     /// Returns a debug port that already serves app page targets, or relaunches the app with one.
