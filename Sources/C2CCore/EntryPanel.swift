@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v2"
+    public static let version = "workspace-attachments-v3"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -106,14 +106,22 @@ public enum EntryPanel {
               if (payload.action === "choose-workspace") {
                 WORKSPACE = payload.workspace || WORKSPACE;
                 hint.textContent = "工作區：" + WORKSPACE;
+                attachButton.textContent = "附加目前專案檔案";
                 setStatus("已選擇工作目錄");
                 showToast("工作目錄已切換為「" + WORKSPACE + "」。");
               } else if (payload.action === "attach-workspace-files") {
                 var count = payload.count || 0;
-                setStatus("已附加到 ChatGPT：" + count + " 個檔案");
-                showToast(payload.truncated
-                  ? "已附加 " + count + " 個檔案到 ChatGPT／Quick Chat；其餘因數量或大小上限略過。"
-                  : "已附加 " + count + " 個檔案到 ChatGPT／Quick Chat。");
+                var batchNumber = payload.batchNumber || 1;
+                var batchCount = payload.batchCount || 1;
+                var remainingCount = payload.remainingCount || 0;
+                setStatus("已附加第 " + batchNumber + "/" + batchCount + " 批（" + count + " 個）");
+                if (payload.hasMore === true) {
+                  attachButton.textContent = "送出後附加下一批（剩 " + remainingCount + " 個）";
+                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加。請先送出這則訊息，再按下一批。");
+                } else {
+                  attachButton.textContent = batchCount > 1 ? "從第一批重新開始" : "重新附加目前專案檔案";
+                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加；全部批次完成。");
+                }
               }
             } else if (payload.cancelled === true) {
               setStatus(""); showToast("已取消。");

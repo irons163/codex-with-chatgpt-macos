@@ -44,6 +44,8 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(source.contains(EntryPanel.resultFunction))
         XCTAssertTrue(source.contains("callNative(\"choose-workspace\")"))
         XCTAssertTrue(source.contains("callNative(\"attach-workspace-files\")"))
+        XCTAssertTrue(source.contains("送出後附加下一批"))
+        XCTAssertTrue(source.contains("從第一批重新開始"))
         XCTAssertFalse(source.contains("callNative(\"open-workspace\")"))
         XCTAssertFalse(source.contains("workspace-context.md"))
         XCTAssertTrue(source.contains("工作區：\" + WORKSPACE"))
@@ -63,8 +65,39 @@ final class EntryTests: XCTestCase {
         let batch = try service.workspaceAttachmentBatch(maxFiles: 1, maxFileBytes: 1024, maxTotalBytes: 1024)
         XCTAssertEqual(batch.files.map(\.lastPathComponent), ["README.md"])
         XCTAssertEqual(batch.candidateCount, 2)
+        XCTAssertEqual(batch.pageCount, 2)
+        XCTAssertEqual(batch.remainingCount, 1)
+        XCTAssertTrue(batch.hasMore)
         XCTAssertTrue(batch.truncated)
         XCTAssertFalse(batch.files.map(\.lastPathComponent).contains(".env"))
+    }
+
+    func testWorkspaceAttachmentBatchNeverExceedsChatGPTLimit() throws {
+        for index in 0..<25 {
+            try "let value = \(index)\n".write(
+                to: project.appendingPathComponent("File\(index).swift"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let service = EntryService(workspace: try Workspace(root: project.path))
+        let batch = try service.workspaceAttachmentBatch(maxFiles: 100)
+        XCTAssertEqual(EntryService.chatGPTMaximumAttachmentFiles, 20)
+        XCTAssertEqual(batch.files.count, 20)
+        XCTAssertEqual(batch.candidateCount, 25)
+        XCTAssertEqual(batch.pageIndex, 0)
+        XCTAssertEqual(batch.pageCount, 2)
+        XCTAssertEqual(batch.remainingCount, 5)
+        XCTAssertTrue(batch.hasMore)
+        XCTAssertTrue(batch.truncated)
+
+        let secondBatch = try service.workspaceAttachmentBatch(pageIndex: 1, maxFiles: 100)
+        XCTAssertEqual(secondBatch.files.count, 5)
+        XCTAssertEqual(secondBatch.pageIndex, 1)
+        XCTAssertEqual(secondBatch.pageCount, 2)
+        XCTAssertEqual(secondBatch.remainingCount, 0)
+        XCTAssertFalse(secondBatch.hasMore)
     }
 
     func testChatGPTAttachmentUsesHiddenGeneralFileInput() {

@@ -92,7 +92,7 @@ c2c entry --app /Applications/ChatGPT.app --debug-port 57330
 `entry` 會以 Chrome DevTools Protocol 連上 Codex/ChatGPT 桌面版（與 theme-switcher 同款的 attach 方式：先沿用現有 debug 埠，否則以 `--remote-debugging-port` 重新啟動 app），在視窗右下注入一個可拖曳的浮動按鈕，提供兩個動作：
 
 - **選擇工作目錄**：使用 macOS 原生目錄選擇視窗切換目前工作區。
-- **附加目前專案檔案**：先開啟 ChatGPT／Quick Chat，再重新掃描工作目錄，套用 ignore 與敏感檔案排除規則後，以 CDP 設定 ChatGPT 的附件輸入。預設最多 40 個檔案、單檔 1 MiB、合計 8 MiB。
+- **附加目前專案檔案**：先開啟 ChatGPT／Quick Chat，再重新掃描工作目錄，套用 ignore 與敏感檔案排除規則後，以 CDP 設定 ChatGPT 的附件輸入。依 ChatGPT 限制，每批最多 20 個檔案；超過時面板會保留下一批，送出目前訊息後再按一次即可繼續。單檔上限 1 MiB、每批合計 8 MiB。
 
 目前桌面 App 的「檔案和資料夾」會開啟 Electron 原生 `NSOpenPanel`，不會觸發 Chromium 的 `Page.fileChooserOpened`。此實作不模擬拖放，而是找出 ChatGPT／Quick Chat composer 的隱藏檔案輸入，再呼叫 CDP `DOM.setFileInputFiles` 指定原始檔案路徑；找不到 ChatGPT 附件輸入時會停止並提示先開啟 Quick Chat，不會退回附加到 Codex 主輸入框。Swift 端會排除 `.gitignore`、`.c2cignore`、`.env`、金鑰、憑證、`.git`、build cache 與 symlink。檔案變更後再按一次即可附加新版。Ctrl-C 或程序離開時會移除面板。
 
