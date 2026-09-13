@@ -24,6 +24,17 @@ struct ResolvedWorkspacePath {
     let relative: String
 }
 
+struct WorkspaceTextFileCandidate {
+    let path: String
+    let size: Int
+    let url: URL
+}
+
+struct WorkspaceTextFileEnumeration {
+    let candidates: [WorkspaceTextFileCandidate]
+    let incomplete: Bool
+}
+
 private struct IgnoreRule {
     let pattern: String
     let negated: Bool
@@ -219,6 +230,42 @@ public final class Workspace {
         }
     }
 
+    func validatedTextFile(at url: URL, maxFileBytes: Int) -> WorkspaceTextFileCandidate? {
+        guard maxFileBytes > 0 else { return nil }
+        let standardized = url.standardizedFileURL.path
+        guard standardized.hasPrefix(root + "/") else { return nil }
+        let relative = String(standardized.dropFirst(root.count + 1)).replacingOccurrences(of: "\\", with: "/")
+        guard !ignoreRules.isHidden(relative), !ignoreRules.isHidden(relative + "/") else { return nil }
+
+        let descriptor = Darwin.open(standardized, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard descriptor >= 0 else { return nil }
+        defer { Darwin.close(descriptor) }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFREG,
+              status.st_size >= 0,
+              status.st_size <= maxFileBytes else { return nil }
+        var actualPath = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard fcntl(descriptor, F_GETPATH, &actualPath) == 0 else { return nil }
+        let opened = URL(fileURLWithPath: String(cString: actualPath)).resolvingSymlinksInPath().path
+        guard opened == standardized, opened.hasPrefix(root + "/") else { return nil }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: min(64 * 1024, maxFileBytes))
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            guard data.count + count <= maxFileBytes else { return nil }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        guard !data.prefix(8192).contains(0), String(data: data, encoding: .utf8) != nil else { return nil }
+        return WorkspaceTextFileCandidate(path: relative, size: data.count, url: URL(fileURLWithPath: opened))
+    }
+
     func readFile(_ requested: String, startLine requestedStart: Int? = nil, endLine requestedEnd: Int? = nil) throws -> [String: Any] {
         let resolved = try resolve(requested)
         let descriptor = Darwin.open(resolved.absolute, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
@@ -309,6 +356,51 @@ public final class Workspace {
         let page = Array(all.dropFirst(min(offset, all.count)).prefix(limit))
         let endOffset = offset > Int.max - page.count ? Int.max : offset + page.count
         return ["path": resolved.relative.isEmpty ? "." : resolved.relative, "entries": page, "total": all.count, "offset": offset, "limit": limit, "hasMore": endOffset < all.count]
+    }
+
+    /// Recursively discovers text files for attachment without the depth and
+    /// result caps used by the MCP directory-listing tool.
+    func enumerateTextFiles(
+        preferredNames: Set<String>,
+        extensions: Set<String>,
+        maxFileBytes: Int
+    ) -> WorkspaceTextFileEnumeration {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        var incomplete = false
+        guard let enumerator = FileManager.default.enumerator(
+            at: URL(fileURLWithPath: root),
+            includingPropertiesForKeys: Array(keys),
+            options: [],
+            errorHandler: { _, _ in incomplete = true; return true }
+        ) else {
+            return WorkspaceTextFileEnumeration(candidates: [], incomplete: true)
+        }
+
+        var candidates: [WorkspaceTextFileCandidate] = []
+        while let url = enumerator.nextObject() as? URL {
+            let standardized = url.standardizedFileURL.path
+            guard standardized.hasPrefix(root + "/") else {
+                enumerator.skipDescendants()
+                incomplete = true
+                continue
+            }
+            let relative = String(standardized.dropFirst(root.count + 1)).replacingOccurrences(of: "\\", with: "/")
+            guard let values = try? url.resourceValues(forKeys: keys) else {
+                incomplete = true
+                continue
+            }
+            if values.isSymbolicLink == true || ignoreRules.isHidden(relative) || ignoreRules.isHidden(relative + "/") {
+                if values.isDirectory == true { enumerator.skipDescendants() }
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
+            let size = values.fileSize ?? 0
+            guard size >= 0, size <= maxFileBytes,
+                  preferredNames.contains(url.lastPathComponent) || extensions.contains(url.pathExtension.lowercased()) else { continue }
+            guard let candidate = validatedTextFile(at: url, maxFileBytes: maxFileBytes) else { continue }
+            candidates.append(candidate)
+        }
+        return WorkspaceTextFileEnumeration(candidates: candidates, incomplete: incomplete)
     }
 
     func search(query: String, path: String? = nil, glob: String? = nil, limit requestedLimit: Int = 50, regex: Bool = false) throws -> [String: Any] {

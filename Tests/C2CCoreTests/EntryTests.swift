@@ -44,6 +44,8 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(source.contains(EntryPanel.resultFunction))
         XCTAssertTrue(source.contains("callNative(\"choose-workspace\")"))
         XCTAssertTrue(source.contains("callNative(\"attach-workspace-files\")"))
+        XCTAssertTrue(source.contains("callNative(\"get-state\", true)"))
+        XCTAssertTrue(source.contains("payload.action === \"state\""))
         XCTAssertTrue(source.contains("送出後附加下一批"))
         XCTAssertTrue(source.contains("從第一批重新開始"))
         XCTAssertFalse(source.contains("callNative(\"open-workspace\")"))
@@ -60,6 +62,7 @@ final class EntryTests: XCTestCase {
         try "let answer = 42\n".write(to: project.appendingPathComponent("main.swift"), atomically: true, encoding: .utf8)
         try "SECRET=value\n".write(to: project.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
         try Data(repeating: 0, count: 32).write(to: project.appendingPathComponent("image.bin"))
+        try Data([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x00, 0xd1]).write(to: project.appendingPathComponent("binary.plist"))
 
         let service = EntryService(workspace: try Workspace(root: project.path))
         let batch = try service.workspaceAttachmentBatch(maxFiles: 1, maxFileBytes: 1024, maxTotalBytes: 1024)
@@ -98,6 +101,41 @@ final class EntryTests: XCTestCase {
         XCTAssertEqual(secondBatch.pageCount, 2)
         XCTAssertEqual(secondBatch.remainingCount, 0)
         XCTAssertFalse(secondBatch.hasMore)
+
+        var frozenQueue = try service.workspaceAttachmentQueue(maxFiles: 100)
+        try "let inserted = true\n".write(
+            to: project.appendingPathComponent("A.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        frozenQueue.nextPageIndex = 1
+        let frozenSecondBatch = try XCTUnwrap(frozenQueue.currentBatch)
+        XCTAssertEqual(frozenSecondBatch.files.count, 5)
+        XCTAssertFalse(frozenSecondBatch.files.map(\.lastPathComponent).contains("A.swift"))
+        XCTAssertEqual(try service.workspaceAttachmentQueue(maxFiles: 100).candidateCount, 26)
+
+        XCTAssertThrowsError(try service.workspaceAttachmentBatch(pageIndex: 99))
+    }
+
+    func testAttachmentScannerHasNoDepthOrThousandEntryCap() throws {
+        let deep = project
+            .appendingPathComponent("one/two/three/four/five/six", isDirectory: true)
+        try AppPaths.ensureDirectory(deep)
+        try "deep\n".write(to: deep.appendingPathComponent("Deep.swift"), atomically: true, encoding: .utf8)
+        for index in 0..<1_001 {
+            let created = FileManager.default.createFile(
+                atPath: project.appendingPathComponent("Source\(index).swift").path,
+                contents: Data("let n = \(index)\n".utf8)
+            )
+            XCTAssertTrue(created)
+        }
+
+        let service = EntryService(workspace: try Workspace(root: project.path))
+        let queue = try service.workspaceAttachmentQueue()
+        XCTAssertEqual(queue.candidateCount, 1_002)
+        XCTAssertEqual(queue.pages.count, 51)
+        XCTAssertTrue(queue.pages.flatMap { $0 }.contains { $0.lastPathComponent == "Deep.swift" })
+        XCTAssertFalse(queue.incomplete)
     }
 
     func testChatGPTAttachmentUsesHiddenGeneralFileInput() {
@@ -106,6 +144,7 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(expression.contains("!input.hasAttribute('accept')"))
         XCTAssertTrue(expression.contains("treeDistance"))
         XCTAssertFalse(expression.contains("Input.dispatchDragEvent"))
+        XCTAssertTrue(EntryService.chatGPTComposerHasAttachmentsExpression.contains("data-composer-attachments-row"))
     }
 
 }

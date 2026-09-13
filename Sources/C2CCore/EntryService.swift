@@ -1,12 +1,29 @@
 import Foundation
 import Darwin
 
-/// Injects a workspace attachment panel into ChatGPT over CDP. Each click
-/// rescans the selected directory and sets the current safe source files on
-/// ChatGPT's file input. This is a refreshed attachment batch, not filesystem
-/// tooling inside the model runtime.
+/// Injects a workspace attachment panel into ChatGPT over CDP. The first click
+/// snapshots safe source paths into stable pages; subsequent clicks consume
+/// that queue through ChatGPT's file input.
 public final class EntryService {
     static let chatGPTMaximumAttachmentFiles = 20
+
+    static let chatGPTComposerHasAttachmentsExpression = """
+    (() => {
+      const candidates = Array.from(document.querySelectorAll('input[type="file"][multiple]'))
+        .filter(input => !input.disabled && !input.hasAttribute('accept'))
+        .map(input => {
+          const root = input.parentElement;
+          const editor = root?.querySelector('[contenteditable="true"][role="textbox"], textarea[role="textbox"]');
+          const rect = editor?.getBoundingClientRect();
+          return { input, root, editor, rect };
+        })
+        .filter(candidate => candidate.rect && candidate.rect.width > 80 && candidate.rect.height > 10)
+        .sort((left, right) => right.rect.x - left.rect.x);
+      const composer = candidates[0];
+      if (!composer) return null;
+      return composer.root.querySelector('[data-composer-attachments-row]') !== null;
+    })()
+    """
 
     /// Selects ChatGPT's general-purpose file input nearest to the rightmost
     /// visible composer. In the Codex desktop layout that is Quick Chat, while
@@ -56,7 +73,7 @@ public final class EntryService {
     private var sessions: [String: CDPSession] = [:]
     private var pickerBusy = false
     private var attachmentBusy = false
-    private var attachmentPageIndex = 0
+    private var attachmentQueue: AttachmentQueueSnapshot?
     private var stopped = false
 
     public init(workspace: Workspace, appOverride: URL? = nil, preferredPort: Int? = nil, log: @escaping (String) -> Void = { print($0) }) {
@@ -146,6 +163,8 @@ public final class EntryService {
     private func handleBinding(session: CDPSession, name: String, payload: [String: Any]) {
         guard name == EntryPanel.bindingName else { return }
         switch payload["action"] as? String {
+        case "get-state":
+            Task { [weak self] in await self?.respond(session, self?.entryStatePayload() ?? ["ok": false]) }
         case "choose-workspace":
             Task { [weak self] in await self?.performChooseWorkspace(session: session) }
         case "attach-workspace-files":
@@ -183,10 +202,11 @@ public final class EntryService {
             let selected = try Workspace(root: result.output.trimmingCharacters(in: .whitespacesAndNewlines))
             withLock {
                 workspace = selected
-                attachmentPageIndex = 0
+                attachmentQueue = nil
             }
             log("Selected workspace: \(selected.root)")
             await respond(session, ["ok": true, "action": "choose-workspace", "workspace": selected.name])
+            await broadcastState()
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
         }
@@ -199,17 +219,43 @@ public final class EntryService {
         let pageCount: Int
         let remainingCount: Int
         let hasMore: Bool
+        let incomplete: Bool
         let truncated: Bool
     }
 
-    func workspaceAttachmentBatch(pageIndex: Int = 0, maxFiles: Int = EntryService.chatGPTMaximumAttachmentFiles, maxFileBytes: Int = 1 * 1024 * 1024, maxTotalBytes: Int = 8 * 1024 * 1024) throws -> AttachmentBatch {
+    struct AttachmentQueueSnapshot {
+        let workspaceID: String
+        let workspaceRoot: String
+        let pages: [[URL]]
+        let candidateCount: Int
+        let incomplete: Bool
+        let maxFileBytes: Int
+        var nextPageIndex: Int
+
+        var currentBatch: AttachmentBatch? {
+            guard pages.indices.contains(nextPageIndex) else { return nil }
+            let remainingCount = pages.indices
+                .filter { $0 > nextPageIndex }
+                .reduce(0) { $0 + pages[$1].count }
+            return AttachmentBatch(
+                files: pages[nextPageIndex],
+                candidateCount: candidateCount,
+                pageIndex: nextPageIndex,
+                pageCount: pages.count,
+                remainingCount: remainingCount,
+                hasMore: nextPageIndex + 1 < pages.count,
+                incomplete: incomplete,
+                truncated: incomplete || nextPageIndex + 1 < pages.count
+            )
+        }
+    }
+
+    func workspaceAttachmentQueue(maxFiles: Int = EntryService.chatGPTMaximumAttachmentFiles, maxFileBytes: Int = 1 * 1024 * 1024, maxTotalBytes: Int = 8 * 1024 * 1024) throws -> AttachmentQueueSnapshot {
         guard maxFiles > 0, maxFileBytes > 0, maxTotalBytes > 0 else {
             throw C2CError("附件數量與容量上限必須大於零。")
         }
         let effectiveMaxFiles = min(maxFiles, Self.chatGPTMaximumAttachmentFiles)
         let selected = withLock { workspace }
-        let listing = try selected.listDirectory(".", depth: 4, limit: 1000)
-        let entries = listing["entries"] as? [[String: Any]] ?? []
         let preferredNames = [
             "AGENTS.md", "README.md", "README", "Package.swift", "package.json",
             "Cargo.toml", "pyproject.toml", "Gemfile", "Podfile", "Makefile"
@@ -221,15 +267,12 @@ public final class EntryService {
             "html", "css", "scss", "sql", "graphql", "proto", "gradle", "plist",
             "strings", "pbxproj", "xcconfig"
         ]
-        let candidates = entries.compactMap { entry -> (path: String, size: Int)? in
-            guard entry["type"] as? String == "file",
-                  let path = entry["path"] as? String,
-                  let size = entry["sizeBytes"] as? Int,
-                  size >= 0, size <= maxFileBytes else { return nil }
-            let url = URL(fileURLWithPath: path)
-            guard preferredNames.contains(url.lastPathComponent) || textExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-            return (path, size)
-        }.sorted { lhs, rhs in
+        let enumeration = selected.enumerateTextFiles(
+            preferredNames: Set(preferredNames),
+            extensions: textExtensions,
+            maxFileBytes: maxFileBytes
+        )
+        let candidates = enumeration.candidates.sorted { lhs, rhs in
             let left = preferredNames.firstIndex(of: URL(fileURLWithPath: lhs.path).lastPathComponent) ?? preferredNames.count
             let right = preferredNames.firstIndex(of: URL(fileURLWithPath: rhs.path).lastPathComponent) ?? preferredNames.count
             return left == right ? lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending : left < right
@@ -244,42 +287,39 @@ public final class EntryService {
                 skippedForLimit = true
                 continue
             }
-            let resolved = try selected.resolve(candidate.path)
-            let url = URL(fileURLWithPath: resolved.absolute)
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-                  values.isRegularFile == true, values.isSymbolicLink != true else { continue }
             if currentPage.count == effectiveMaxFiles ||
                 (!currentPage.isEmpty && candidate.size > maxTotalBytes - currentPageBytes) {
                 pages.append(currentPage)
                 currentPage = []
                 currentPageBytes = 0
             }
-            currentPage.append(url)
+            currentPage.append(candidate.url)
             currentPageBytes += candidate.size
         }
         if !currentPage.isEmpty { pages.append(currentPage) }
-
-        let selectedPageIndex = pages.indices.contains(pageIndex) ? pageIndex : 0
-        let files = pages.indices.contains(selectedPageIndex) ? pages[selectedPageIndex] : []
-        let remainingCount = pages.indices
-            .filter { $0 > selectedPageIndex }
-            .reduce(0) { $0 + pages[$1].count }
-        return AttachmentBatch(
-            files: files,
+        return AttachmentQueueSnapshot(
+            workspaceID: selected.id,
+            workspaceRoot: selected.root,
+            pages: pages,
             candidateCount: candidates.count,
-            pageIndex: selectedPageIndex,
-            pageCount: pages.count,
-            remainingCount: remainingCount,
-            hasMore: selectedPageIndex + 1 < pages.count,
-            truncated: skippedForLimit || selectedPageIndex + 1 < pages.count || listing["hasMore"] as? Bool == true
+            incomplete: skippedForLimit || enumeration.incomplete,
+            maxFileBytes: maxFileBytes,
+            nextPageIndex: 0
         )
     }
 
+    func workspaceAttachmentBatch(pageIndex: Int = 0, maxFiles: Int = EntryService.chatGPTMaximumAttachmentFiles, maxFileBytes: Int = 1 * 1024 * 1024, maxTotalBytes: Int = 8 * 1024 * 1024) throws -> AttachmentBatch {
+        var queue = try workspaceAttachmentQueue(maxFiles: maxFiles, maxFileBytes: maxFileBytes, maxTotalBytes: maxTotalBytes)
+        queue.nextPageIndex = pageIndex
+        guard let batch = queue.currentBatch else { throw C2CError("附件批次已失效，請從第一批重新開始。") }
+        return batch
+    }
+
     private func performAttachWorkspaceFiles(session: CDPSession) async {
-        let request = withLock { () -> (busy: Bool, workspace: Workspace, pageIndex: Int) in
+        let request = withLock { () -> (busy: Bool, workspace: Workspace, queue: AttachmentQueueSnapshot?) in
             let busy = attachmentBusy || pickerBusy
             if !busy { attachmentBusy = true }
-            return (busy, workspace, attachmentPageIndex)
+            return (busy, workspace, attachmentQueue)
         }
         guard !request.busy else {
             await respond(session, ["ok": false, "error": "附件仍在處理中，請稍候。"])
@@ -288,12 +328,30 @@ public final class EntryService {
         defer { withLock { attachmentBusy = false } }
         do {
             let selected = request.workspace
-            let batch = try workspaceAttachmentBatch(pageIndex: request.pageIndex)
+            var queue = try request.queue ?? workspaceAttachmentQueue()
+            guard queue.workspaceID == selected.id, queue.workspaceRoot == selected.root else {
+                throw C2CError("工作目錄已變更，附件批次已重置，請再按一次。")
+            }
+            guard let batch = queue.currentBatch else {
+                throw C2CError("附件批次已失效，請從第一批重新開始。")
+            }
             guard !batch.files.isEmpty else { throw C2CError("工作目錄中沒有可附加的文字或程式碼檔案。") }
-            try await attachToChatGPT(batch.files, session: session)
+            let validatedFiles = batch.files.compactMap {
+                selected.validatedTextFile(at: $0, maxFileBytes: queue.maxFileBytes)?.url
+            }
+            guard validatedFiles.count == batch.files.count else {
+                withLock { attachmentQueue = nil }
+                await broadcastState()
+                throw C2CError("批次快照中的檔案已刪除或不再安全，已重置；請從第一批重新開始。")
+            }
+            if try await chatGPTComposerHasAttachments(session: session) {
+                throw C2CError("ChatGPT／Quick Chat 輸入框仍有附件。請先送出或移除目前附件，再附加下一批。")
+            }
+            try await attachToChatGPT(validatedFiles, session: session)
+            if batch.hasMore { queue.nextPageIndex += 1 }
             withLock {
                 if workspace.root == selected.root {
-                    attachmentPageIndex = batch.hasMore ? batch.pageIndex + 1 : 0
+                    attachmentQueue = batch.hasMore ? queue : nil
                 }
             }
             log("Attached workspace batch \(batch.pageIndex + 1)/\(batch.pageCount) (\(batch.files.count) file(s)) to ChatGPT for \(selected.name).")
@@ -307,10 +365,42 @@ public final class EntryService {
                 "batchCount": batch.pageCount,
                 "remainingCount": batch.remainingCount,
                 "hasMore": batch.hasMore,
+                "incomplete": batch.incomplete,
                 "truncated": batch.truncated
             ])
+            await broadcastState()
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
+        }
+    }
+
+    private func chatGPTComposerHasAttachments(session: CDPSession) async throws -> Bool {
+        (try await session.evaluateValue(Self.chatGPTComposerHasAttachmentsExpression, timeout: 5) as? Bool) == true
+    }
+
+    private func entryStatePayload() -> [String: Any] {
+        withLock {
+            var payload: [String: Any] = [
+                "ok": true,
+                "action": "state",
+                "workspace": workspace.name,
+                "hasPendingBatch": false
+            ]
+            if let queue = attachmentQueue, let batch = queue.currentBatch,
+               queue.workspaceID == workspace.id {
+                payload["hasPendingBatch"] = true
+                payload["batchNumber"] = batch.pageIndex + 1
+                payload["batchCount"] = batch.pageCount
+                payload["remainingCount"] = batch.files.count + batch.remainingCount
+            }
+            return payload
+        }
+    }
+
+    private func broadcastState() async {
+        let payload = entryStatePayload()
+        for session in withLock({ Array(sessions.values) }) where session.isConnected {
+            await respond(session, payload)
         }
     }
 

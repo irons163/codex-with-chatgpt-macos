@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v3"
+    public static let version = "workspace-attachments-v4"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -87,23 +87,40 @@ public enum EntryPanel {
             toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 4000);
           }
           function setStatus(message) { status.textContent = message; }
-          function callNative(action) {
+          function setBusy(busy) {
+            chooseButton.disabled = busy;
+            attachButton.disabled = busy;
+          }
+          function updateQueueState(payload) {
+            WORKSPACE = payload.workspace || WORKSPACE;
+            hint.textContent = "工作區：" + WORKSPACE;
+            if (payload.hasPendingBatch === true) {
+              attachButton.textContent = "送出後附加下一批（剩 " + (payload.remainingCount || 0) + " 個）";
+            } else {
+              attachButton.textContent = "附加目前專案檔案";
+            }
+          }
+          function callNative(action, silent) {
             if (typeof window[BINDING] !== "function") {
               showToast("工作目錄連線尚未就緒，請確認 c2c 仍在執行。");
               return;
             }
-            setStatus("處理中…");
+            setBusy(true);
+            if (!silent) setStatus("處理中…");
             try { window[BINDING](JSON.stringify({ action: action })); }
-            catch (error) { setStatus(""); showToast("無法呼叫 c2c：" + error); }
+            catch (error) { setBusy(false); setStatus(""); showToast("無法呼叫 c2c：" + error); }
           }
           chooseButton.addEventListener("click", function () { callNative("choose-workspace"); });
           attachButton.addEventListener("click", function () { callNative("attach-workspace-files"); });
           window[RESULT] = function (payloadText) {
             var payload = null;
             try { payload = JSON.parse(String(payloadText)); } catch (error) {}
+            setBusy(false);
             if (!payload || typeof payload !== "object") { setStatus(""); showToast("c2c 回應無法解析。"); return; }
             if (payload.ok === true) {
-              if (payload.action === "choose-workspace") {
+              if (payload.action === "state") {
+                updateQueueState(payload);
+              } else if (payload.action === "choose-workspace") {
                 WORKSPACE = payload.workspace || WORKSPACE;
                 hint.textContent = "工作區：" + WORKSPACE;
                 attachButton.textContent = "附加目前專案檔案";
@@ -117,10 +134,13 @@ public enum EntryPanel {
                 setStatus("已附加第 " + batchNumber + "/" + batchCount + " 批（" + count + " 個）");
                 if (payload.hasMore === true) {
                   attachButton.textContent = "送出後附加下一批（剩 " + remainingCount + " 個）";
-                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加。請先送出這則訊息，再按下一批。");
+                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加。請先送出這則訊息，再按下一批。" +
+                    (payload.incomplete === true ? " 部分檔案因無法安全讀取而未列入。" : ""));
                 } else {
                   attachButton.textContent = batchCount > 1 ? "從第一批重新開始" : "重新附加目前專案檔案";
-                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加；全部批次完成。");
+                  showToast(payload.incomplete === true
+                    ? "可安全讀取的批次已完成；部分檔案未列入。"
+                    : "第 " + batchNumber + "/" + batchCount + " 批已附加；全部批次完成。");
                 }
               }
             } else if (payload.cancelled === true) {
@@ -129,6 +149,7 @@ public enum EntryPanel {
               setStatus(""); showToast(payload.error || "讀取工作目錄失敗。");
             }
           };
+          callNative("get-state", true);
           var drag = null;
           bubble.addEventListener("pointerdown", function (event) {
             if (event.button !== 0) return;
