@@ -1,8 +1,8 @@
 import Foundation
 
 public enum EntryPanel {
-    public static let marker = "__c2cEntryInstalled"
-    public static let bindingName = "c2cEntryUpload"
+    public static let marker = "__c2cWorkspaceReaderInstalled"
+    public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
 
@@ -46,26 +46,26 @@ public enum EntryPanel {
           shadow.appendChild(style);
           var bubble = document.createElement("div");
           bubble.className = "bubble";
-          bubble.title = "c2c 上傳入口";
-          bubble.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l6 6h-4v7h-4V8H6l6-6zm-7 18h14v2H5v-2z"/></svg>';
+          bubble.title = "Codex 即時工作目錄";
+          bubble.innerHTML = '<svg viewBox="0 0 24 24"><path d="M10 4l2 2h8a2 2 0 012 2v9a3 3 0 01-3 3H5a3 3 0 01-3-3V7a3 3 0 013-3h5zm-5 4v9a1 1 0 001 1h13a1 1 0 001-1V8H5z"/></svg>';
           var panel = document.createElement("div");
           panel.className = "panel";
           var heading = document.createElement("h1");
-          heading.textContent = "上傳入口";
+          heading.textContent = "Codex 即時工作目錄";
           var hint = document.createElement("p");
           hint.textContent = "工作區：" + WORKSPACE;
-          var attachButton = document.createElement("button");
-          attachButton.textContent = "附加檔案到目前對話";
-          var uploadButton = document.createElement("button");
-          uploadButton.textContent = "上傳檔案到工作區";
+          var chooseButton = document.createElement("button");
+          chooseButton.textContent = "選擇工作目錄…";
+          var openButton = document.createElement("button");
+          openButton.textContent = "以本機專案開啟";
           var status = document.createElement("div");
           status.className = "status";
           var toast = document.createElement("div");
           toast.className = "toast";
           panel.appendChild(heading);
           panel.appendChild(hint);
-          panel.appendChild(attachButton);
-          panel.appendChild(uploadButton);
+          panel.appendChild(chooseButton);
+          panel.appendChild(openButton);
           panel.appendChild(status);
           shadow.appendChild(bubble);
           shadow.appendChild(panel);
@@ -79,56 +79,35 @@ public enum EntryPanel {
             toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 4000);
           }
           function setStatus(message) { status.textContent = message; }
-          function findAttachButton() {
-            var nodes = document.querySelectorAll('button,[role="button"]');
-            for (var i = 0; i < nodes.length; i++) {
-              var label = nodes[i].getAttribute("aria-label") || "";
-              if (/新增檔案|添加文件|ファイルを追加|파일 추가|attach|add files?/i.test(label)
-                  && !/選單|menu|profile|个人资料|個人檔案/i.test(label)) return nodes[i];
-            }
-            return null;
-          }
-          function clickInput(input) {
-            try { input.click(); showToast("已開啟檔案選擇視窗。"); }
-            catch (error) { showToast("無法開啟檔案選擇視窗：" + error); }
-          }
-          function attachToConversation() {
-            var existing = document.querySelector('input[type="file"]');
-            if (existing) { clickInput(existing); return; }
-            var button = findAttachButton();
-            if (!button) { showToast("找不到附加檔案按鈕，請使用應用程式內建功能。"); return; }
-            button.click();
-            var tries = 0;
-            var timer = setInterval(function () {
-              tries += 1;
-              var input = document.querySelector('input[type="file"]');
-              if (input) { clearInterval(timer); clickInput(input); return; }
-              if (tries >= 10) { clearInterval(timer); showToast("已開啟附加選單，請從中選擇檔案來源。"); }
-            }, 150);
-          }
-          function uploadToWorkspace() {
+          function callNative(action) {
             if (typeof window[BINDING] !== "function") {
-              showToast("c2c 連線尚未就緒，請確認 c2c entry 仍在執行。");
+              showToast("工作目錄連線尚未就緒，請確認 c2c 仍在執行。");
               return;
             }
             setStatus("處理中…");
-            try { window[BINDING](JSON.stringify({ action: "upload" })); }
+            try { window[BINDING](JSON.stringify({ action: action })); }
             catch (error) { setStatus(""); showToast("無法呼叫 c2c：" + error); }
           }
-          attachButton.addEventListener("click", attachToConversation);
-          uploadButton.addEventListener("click", uploadToWorkspace);
+          chooseButton.addEventListener("click", function () { callNative("choose-workspace"); });
+          openButton.addEventListener("click", function () { callNative("open-workspace"); });
           window[RESULT] = function (payloadText) {
             var payload = null;
             try { payload = JSON.parse(String(payloadText)); } catch (error) {}
             if (!payload || typeof payload !== "object") { setStatus(""); showToast("c2c 回應無法解析。"); return; }
             if (payload.ok === true) {
-              var names = Array.isArray(payload.files) ? payload.files.join("、") : "";
-              setStatus("已上傳 " + (payload.count || 0) + " 個檔案");
-              showToast("已上傳 " + (payload.count || 0) + " 個檔案" + (names ? "：" + names : ""));
+              if (payload.action === "choose-workspace") {
+                WORKSPACE = payload.workspace || WORKSPACE;
+                hint.textContent = "工作區：" + WORKSPACE;
+                setStatus("已選擇工作目錄");
+                showToast("工作目錄已切換為「" + WORKSPACE + "」。");
+              } else if (payload.action === "open-workspace") {
+                setStatus("已開啟即時專案");
+                showToast("已切換到「" + (payload.workspace || WORKSPACE) + "」；新對話會直接讀取最新檔案。");
+              }
             } else if (payload.cancelled === true) {
               setStatus(""); showToast("已取消。");
             } else {
-              setStatus(""); showToast(payload.error || "上傳失敗。");
+              setStatus(""); showToast(payload.error || "讀取工作目錄失敗。");
             }
           };
           var drag = null;

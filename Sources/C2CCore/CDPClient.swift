@@ -340,6 +340,24 @@ public enum ChatGPTApp {
         guard result.code == 0 else { throw C2CError("Cannot launch \(app.lastPathComponent): \(result.output)") }
     }
 
+    static func workspaceOpenArguments(app: URL, workspace: Workspace) -> [String] {
+        ["-a", app.path, workspace.root]
+    }
+
+    /// Sends a folder through the desktop app's native `public.folder` open
+    /// handler. Codex then creates or selects a local project whose tasks use
+    /// that folder as their live working directory.
+    public static func openWorkspace(app: URL, workspace: Workspace) throws {
+        let result = try runCommand(
+            "/usr/bin/open",
+            workspaceOpenArguments(app: app, workspace: workspace),
+            timeout: 20
+        )
+        guard result.code == 0 else {
+            throw C2CError("Cannot open \(workspace.name) in \(app.lastPathComponent): \(result.output)")
+        }
+    }
+
     /// Returns a debug port that already serves app page targets, or relaunches the app with one.
     public static func ensureDebugPort(app: URL, preferred: Int?, log: (String) -> Void) async throws -> Int {
         if let existing = await CDPDebug.existingDebugPort(preferred: preferred) {

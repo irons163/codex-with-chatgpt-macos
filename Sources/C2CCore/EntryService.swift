@@ -1,16 +1,17 @@
 import Foundation
 import Darwin
 
-/// Injects the upload entry panel into the ChatGPT desktop app over CDP and
-/// serves its actions. The renderer can only signal "the user clicked"; the
-/// native side owns every file choice (osascript picker) and every write.
+/// Injects a local-workspace panel into the ChatGPT desktop app over CDP.
+/// The panel hands a user-selected folder to the app's native local-project
+/// handler, so subsequent Codex tasks use the live directory as their cwd.
 public final class EntryService {
-    public let workspace: Workspace
+    public private(set) var workspace: Workspace
     private let appOverride: URL?
     private let preferredPort: Int?
     private let log: (String) -> Void
     private let lock = NSLock()
     private var sessions: [String: CDPSession] = [:]
+    private var resolvedApp: URL?
     private var pickerBusy = false
     private var stopped = false
 
@@ -32,6 +33,7 @@ public final class EntryService {
 
     public func run() async throws {
         let app = try ChatGPTApp.locate(override: appOverride?.path)
+        withLock { resolvedApp = app }
         log("Using app: \(app.path)")
         let port = try await ChatGPTApp.ensureDebugPort(app: app, preferred: preferredPort, log: log)
         let source = EntryPanel.installScript(workspaceName: workspace.name)
@@ -75,7 +77,7 @@ public final class EntryService {
                 try await session.addBinding(name: EntryPanel.bindingName)
                 try await session.addScriptOnNewDocument(source)
                 try await session.evaluate(source)
-                log("Upload entry injected into window \(target.id).")
+                log("Workspace reader injected into window \(target.id).")
             } catch {
                 session.close()
                 withLock { _ = sessions.removeValue(forKey: target.id) }
@@ -88,7 +90,7 @@ public final class EntryService {
             if present != true {
                 do {
                     try await session.evaluate(source)
-                    log("Re-injected upload entry into window \(id).")
+                    log("Re-injected workspace reader into window \(id).")
                 } catch {
                     session.close()
                     withLock { _ = sessions.removeValue(forKey: id) }
@@ -100,103 +102,63 @@ public final class EntryService {
 
     private func handleBinding(session: CDPSession, name: String, payload: [String: Any]) {
         guard name == EntryPanel.bindingName else { return }
-        guard (payload["action"] as? String) == "upload" else {
+        switch payload["action"] as? String {
+        case "choose-workspace":
+            Task { [weak self] in await self?.performChooseWorkspace(session: session) }
+        case "open-workspace":
+            Task { [weak self] in await self?.performOpenWorkspace(session: session) }
+        default:
             Task { await respond(session, ["ok": false, "error": "Unknown action"]) }
-            return
         }
-        Task { [weak self] in await self?.performUpload(session: session) }
     }
 
-    private enum PickOutcome {
-        case cancelled
-        case failed(String)
-        case picked([String])
-    }
-
-    private func pickFiles() -> PickOutcome {
-        let script = """
-        set chosen to choose file with multiple selections allowed
-        set output to ""
-        repeat with anItem in chosen
-          set output to output & (POSIX path of anItem) & linefeed
-        end repeat
-        return output
-        """
-        guard let result = try? runCommand("/usr/bin/osascript", ["-e", script], timeout: 3600) else {
-            return .failed("無法啟動檔案選擇視窗。")
-        }
-        if result.code == 0 {
-            let paths = result.output.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            return paths.isEmpty ? .cancelled : .picked(paths)
-        }
-        if result.output.range(of: "user canceled", options: [.regularExpression, .caseInsensitive]) != nil { return .cancelled }
-        return .failed("檔案選擇失敗：\(result.output.trimmingCharacters(in: .whitespacesAndNewlines))")
-    }
-
-    private func performUpload(session: CDPSession) async {
+    private func performChooseWorkspace(session: CDPSession) async {
         let wasBusy = withLock {
             let busy = pickerBusy
             if !busy { pickerBusy = true }
             return busy
         }
         guard !wasBusy else {
-            await respond(session, ["ok": false, "error": "已經有檔案選擇視窗開啟中。"])
+            await respond(session, ["ok": false, "error": "已經有目錄選擇視窗開啟中。"])
             return
         }
         defer { withLock { pickerBusy = false } }
-        switch pickFiles() {
-        case .cancelled:
-            await respond(session, ["ok": false, "cancelled": true])
-        case .failed(let message):
-            await respond(session, ["ok": false, "error": message])
-        case .picked(let paths):
-            do {
-                let files = try copyIntoWorkspace(paths: paths)
-                log("Uploaded \(files.count) file(s) into \(workspace.name)/uploads.")
-                await respond(session, ["ok": true, "count": files.count, "files": files, "workspace": workspace.name])
-            } catch {
-                await respond(session, ["ok": false, "error": error.localizedDescription])
+        let script = "POSIX path of (choose folder with prompt \"選擇要讓 ChatGPT 讀取的工作目錄\")"
+        guard let result = try? runCommand("/usr/bin/osascript", ["-e", script], timeout: 3600) else {
+            await respond(session, ["ok": false, "error": "無法啟動目錄選擇視窗。"])
+            return
+        }
+        if result.code != 0 {
+            if result.output.range(of: "user canceled", options: [.regularExpression, .caseInsensitive]) != nil {
+                await respond(session, ["ok": false, "cancelled": true])
+            } else {
+                await respond(session, ["ok": false, "error": "選擇工作目錄失敗。"])
             }
+            return
+        }
+        do {
+            let selected = try Workspace(root: result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+            withLock { workspace = selected }
+            log("Selected workspace: \(selected.root)")
+            await respond(session, ["ok": true, "action": "choose-workspace", "workspace": selected.name])
+        } catch {
+            await respond(session, ["ok": false, "error": error.localizedDescription])
         }
     }
 
-    public static func sanitizeFileName(_ raw: String) -> String {
-        let name = (raw.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).lastPathComponent
-        let clean = name.replacingOccurrences(of: "\0", with: "")
-        return clean.isEmpty ? "untitled" : clean
-    }
-
-    func copyIntoWorkspace(paths: [String]) throws -> [String] {
-        let uploadsURL = URL(fileURLWithPath: workspace.root).appendingPathComponent("uploads")
-        try FileManager.default.createDirectory(at: uploadsURL, withIntermediateDirectories: true)
-        let canonical = uploadsURL.resolvingSymlinksInPath().path
-        guard canonical == workspace.root || canonical.hasPrefix(workspace.root + "/") else {
-            throw C2CError("uploads 目錄解析到工作區之外，已拒絕寫入。")
+    private func performOpenWorkspace(session: CDPSession) async {
+        guard let app = withLock({ resolvedApp }) else {
+            await respond(session, ["ok": false, "error": "找不到目前連線的 Codex App。"])
+            return
         }
-        var uploaded: [String] = []
-        for path in paths {
-            let source = URL(fileURLWithPath: path)
-            guard let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-                  values.isSymbolicLink != true, values.isRegularFile == true else {
-                throw C2CError("\(source.lastPathComponent) 不是一般檔案；資料夾與符號連結不支援。")
-            }
-            let destination = uniqueDestination(uploadsURL: uploadsURL, fileName: Self.sanitizeFileName(source.lastPathComponent))
-            try FileManager.default.copyItem(at: source, to: destination)
-            uploaded.append("uploads/" + destination.lastPathComponent)
+        do {
+            let selected = withLock { workspace }
+            try ChatGPTApp.openWorkspace(app: app, workspace: selected)
+            log("Opened live local project for \(selected.name).")
+            await respond(session, ["ok": true, "action": "open-workspace", "workspace": selected.name])
+        } catch {
+            await respond(session, ["ok": false, "error": error.localizedDescription])
         }
-        return uploaded
-    }
-
-    private func uniqueDestination(uploadsURL: URL, fileName: String) -> URL {
-        let base = (fileName as NSString).deletingPathExtension
-        let ext = (fileName as NSString).pathExtension
-        var candidate = uploadsURL.appendingPathComponent(fileName)
-        var index = 1
-        while FileManager.default.fileExists(atPath: candidate.path) && index < 1000 {
-            candidate = uploadsURL.appendingPathComponent(ext.isEmpty ? "\(base)-\(index)" : "\(base)-\(index).\(ext)")
-            index += 1
-        }
-        return candidate
     }
 
     private func respond(_ session: CDPSession, _ payload: [String: Any]) async {

@@ -59,13 +59,32 @@ struct Arguments {
 }
 
 @main struct CLI {
+    static func defaultWorkspacePath() -> String {
+        let current = FileManager.default.currentDirectoryPath
+        // Swift Package schemes run executables from DerivedData by default.
+        // In that case use the package containing this source file, so Xcode's
+        // Run button selects the project the user opened instead of /Debug.
+        guard current.contains("/Library/Developer/Xcode/DerivedData/") else { return current }
+        let package = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: package.appendingPathComponent("Package.swift").path) else {
+            return current
+        }
+        return package.path
+    }
+
     static var configOverride: URL? {
         guard let path = ProcessInfo.processInfo.environment["C2C_CODEX_CONFIG"], !path.isEmpty else { return nil }
         return URL(fileURLWithPath: path).standardizedFileURL
     }
     static let help = """
     Codex with ChatGPT — Swift for macOS
-    Usage: c2c <command> [options]
+    Usage: c2c [entry options]
+           c2c <command> [options]
+
+      (no command)               Inject into Codex/ChatGPT using this directory
 
       setup [--no-tunnel]         Start bridge, tunnel and one-time pairing
       start [--tunnel]            Start or reuse the workspace bridge
@@ -74,7 +93,7 @@ struct Arguments {
       pair | unpair              Create a pairing code or revoke authorization
       workspace                  Inspect the current workspace
       entry [--app PATH] [--debug-port N]
-                                 Inject an upload entry into the ChatGPT app
+                                 Open a live Codex project from the CDP panel
       logs [--lines N]            Show private bridge logs
       session get|set|clear       Remember ChatGPT project and conversation
       prefs get|set               Remember developer mode and setup preferences
@@ -110,8 +129,10 @@ struct Arguments {
     }
     static func run(_ args: Arguments) async throws {
         if args.flags.contains("version") { print(c2cVersion); return }
-        if args.flags.contains("help") || args.words.isEmpty { print(help); return }
-        let command = args.words[0]
+        if args.flags.contains("help") { print(help); return }
+        // CDP injection is the primary, zero-configuration workflow. This also
+        // makes Xcode's Run button useful without editing a Scheme first.
+        let command = args.words.first ?? "entry"
         let sub = args.words.count > 1 ? args.words[1] : "get"
         guard args.words.count <= (["session", "prefs", "tunnel"].contains(command) ? 2 : 1) else { throw C2CError("Unexpected positional argument") }
         try args.validate(command: command, subcommand: sub)
@@ -129,7 +150,7 @@ struct Arguments {
         }
         if command == "update-check" { try updateCheck(args, state: state); return }
         if command == "tunnel", sub == "login" { try TunnelManager.login(); emit(["ok": true, "loggedIn": TunnelManager.loggedIn], json: json); return }
-        let root = args.options["workspace"] ?? FileManager.default.currentDirectoryPath
+        let root = args.options["workspace"] ?? defaultWorkspacePath()
         let workspace = try Workspace(root: root)
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
         switch command {
@@ -164,7 +185,7 @@ struct Arguments {
             signal(SIGPIPE, SIG_IGN); signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
             let service = EntryService(workspace: workspace, appOverride: appOverride.map { URL(fileURLWithPath: $0) }, preferredPort: preferredPort, log: { print($0); fflush(stdout) })
             let serviceTask = Task { try await service.run() }
-            print("Upload entry running for \(workspace.name). Press Ctrl-C to stop.")
+            print("Live workspace entry running for \(workspace.name). Press Ctrl-C to stop.")
             fflush(stdout)
             let outcome: Result<Void, Error> = await withCheckedContinuation { (continuation: CheckedContinuation<Result<Void, Error>, Never>) in
                 final class EntryShutdown: @unchecked Sendable {

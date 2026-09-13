@@ -25,7 +25,31 @@ swift test
 
 安裝腳本不會修改 shell 設定、Codex 設定或 ChatGPT 連線。
 
-## 使用
+## 使用（直接 CDP 注入）
+
+在 Xcode 開啟 `Package.swift`、選擇 `c2c` scheme 後直接按 Run 即可；程式會把該
+Swift Package 根目錄當成工作區，不必設定 Scheme arguments，也不需要 `cloudflared`、
+MCP、OAuth 或配對碼。從終端機啟動也只需：
+
+```sh
+cd /path/to/project
+c2c
+```
+
+不帶命令時，`c2c` 會把目前目錄當成工作區，尋找既有的 Codex/ChatGPT CDP
+debug port；若找不到，會以本機 debug port 重新啟動桌面 app，然後注入工作目錄入口。
+需要指定其他工作區或 app 時才加參數：
+
+```sh
+c2c --workspace /path/to/project
+c2c --workspace /path/to/project --app /Applications/ChatGPT.app
+```
+
+注入面板可另外選擇工作目錄，再交給 Codex 桌面版的原生資料夾開啟機制，建立或切換至
+真正的本機專案。新對話會以該目錄作為工作目錄，依需求讀取磁碟上的最新檔案，不會建立
+或上傳 Markdown 快照。程序保持前景執行以維持 CDP 連線，按 Ctrl-C 會移除注入介面並結束。
+
+## 進階：MCP 橋接
 
 ```sh
 c2c workspace --workspace /path/to/project --json
@@ -58,7 +82,7 @@ c2c start --tunnel --workspace /path/to/project
 
 保留 `setup`、`start`、`serve`、`stop`、`restart`、`status`、`doctor`、`pair`、`unpair`、`logs`、`workspace`、`entry`、`sandbox-allow`、`update-check`、`session`、`prefs`、`record`、`tunnel`。完整參數見 `c2c --help`。
 
-## 上傳入口（CDP 注入）
+## 工作目錄入口（明確指定 entry 命令）
 
 ```sh
 c2c entry --workspace /path/to/project        # 前景執行，Ctrl-C 結束
@@ -67,10 +91,10 @@ c2c entry --app /Applications/ChatGPT.app --debug-port 57330
 
 `entry` 會以 Chrome DevTools Protocol 連上 Codex/ChatGPT 桌面版（與 theme-switcher 同款的 attach 方式：先沿用現有 debug 埠，否則以 `--remote-debugging-port` 重新啟動 app），在視窗右下注入一個可拖曳的浮動按鈕，提供兩個動作：
 
-- **附加檔案到目前對話**：點擊 app 自己的 `<input type="file">`，完全走原生附檔流程。
-- **上傳檔案到工作區**：渲染器只發出「使用者點了」的 CDP binding 訊號；檔案由原生端 `osascript` 檔案挑選視窗選取（OS 層使用者同意），再複製進 `<workspace>/uploads/`（同名自動加 `-1`、`-2`）。
+- **選擇工作目錄**：使用 macOS 原生目錄選擇視窗切換目前工作區。
+- **以本機專案開啟**：把選定資料夾交給 Codex 桌面版的原生 `public.folder` handler，建立或切換本機專案；接著建立的新對話會直接以該資料夾為工作目錄。
 
-安全屬性：MCP 工具維持唯讀、bridge 不新增任何端點；渲染器無法指定路徑或內容，寫入目的地永遠在工作區 `uploads/` 內並檢查 symlink 逃逸。Ctrl-C 或程序離開時會自動移除注入的面板；app 更新造成的 selector 漂移只影響「附加到對話」（找不到檔案輸入欄時會提示），不影響工作區上傳。同一時間只會有一個檔案挑選視窗。
+CDP 只注入浮動面板與把按鈕事件送回 Swift；不會把檔案內容塞進頁面，也不會模擬附件。實際檔案存取由 Codex 本機工作階段處理，能力與權限以輸入框顯示的原生權限模式為準。一般雲端 ChatGPT 對話不會因此取得本機工具。Ctrl-C 或程序離開時會自動移除注入面板。同一時間只會有一個目錄選擇視窗。
 
 ```sh
 c2c session set --mode project --project-url 'https://chatgpt.com/g/g-p-example/project'

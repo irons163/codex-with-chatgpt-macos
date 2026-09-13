@@ -31,14 +31,16 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(CDPDebug.parseTargets("not-a-list" as Any).isEmpty)
     }
 
-    func testInstallScriptIsIdempotentAndIncludesActions() throws {
+    func testInstallScriptIsIdempotentAndIncludesWorkspaceActions() throws {
         let source = EntryPanel.installScript(workspaceName: "my project")
         XCTAssertTrue(source.contains("var MARKER = \"\(EntryPanel.marker)\";"))
         XCTAssertTrue(source.contains("if (window[MARKER]) return \"already\";"))
         XCTAssertTrue(source.contains(EntryPanel.bindingName))
         XCTAssertTrue(source.contains(EntryPanel.resultFunction))
-        XCTAssertTrue(source.contains("input[type=\"file\"]"))
-        XCTAssertTrue(source.contains("{ action: \"upload\" }"))
+        XCTAssertTrue(source.contains("callNative(\"choose-workspace\")"))
+        XCTAssertTrue(source.contains("callNative(\"open-workspace\")"))
+        XCTAssertFalse(source.contains("attach-workspace"))
+        XCTAssertFalse(source.contains("workspace-context.md"))
         XCTAssertTrue(source.contains("工作區：\" + WORKSPACE"))
         XCTAssertTrue(source.contains("\"my project\""))
         let cleared = EntryPanel.clearScript
@@ -46,34 +48,13 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(cleared.contains("delete window.\(EntryPanel.marker)"))
     }
 
-    func testSanitizeFileName() {
-        XCTAssertEqual(EntryService.sanitizeFileName("photo.png"), "photo.png")
-        XCTAssertEqual(EntryService.sanitizeFileName("../../etc/passwd"), "passwd")
-        XCTAssertEqual(EntryService.sanitizeFileName("a/b/c.txt"), "c.txt")
-        XCTAssertEqual(EntryService.sanitizeFileName("  spaced name.zip "), "spaced name.zip")
-        XCTAssertEqual(EntryService.sanitizeFileName(""), "untitled")
-        XCTAssertEqual(EntryService.sanitizeFileName("no\0null.bin"), "nonull.bin")
-    }
-
-    func testCopyIntoWorkspaceRejectsEscapeAndDuplicatesNames() throws {
+    func testNativeWorkspaceOpenUsesExactAppAndDirectory() throws {
+        let app = URL(fileURLWithPath: "/Applications/ChatGPT.app")
         let workspace = try Workspace(root: project.path)
-        let service = EntryService(workspace: workspace)
-        let source = root.appendingPathComponent("source.txt")
-        try "hello\n".write(to: source, atomically: true, encoding: .utf8)
-
-        let first = try service.copyIntoWorkspace(paths: [source.path])
-        XCTAssertEqual(first, ["uploads/source.txt"])
-        let second = try service.copyIntoWorkspace(paths: [source.path])
-        XCTAssertEqual(second, ["uploads/source-1.txt"])
-
-        // A directory masquerading as a file must be rejected.
-        let directory = root.appendingPathComponent("folder"); try AppPaths.ensureDirectory(directory)
-        XCTAssertThrowsError(try service.copyIntoWorkspace(paths: [directory.path]))
-
-        // uploads must stay inside the workspace: replace it with a symlink outside.
-        let uploads = project.appendingPathComponent("uploads")
-        try FileManager.default.removeItem(at: uploads)
-        try FileManager.default.createSymbolicLink(at: uploads, withDestinationURL: root.appendingPathComponent("elsewhere"))
-        XCTAssertThrowsError(try service.copyIntoWorkspace(paths: [source.path]))
+        XCTAssertEqual(
+            ChatGPTApp.workspaceOpenArguments(app: app, workspace: workspace),
+            ["-a", app.path, workspace.root]
+        )
     }
+
 }
