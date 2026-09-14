@@ -318,12 +318,11 @@ public enum ChatGPTApp {
     }
 
     public static func quit(app: URL) async {
-        if let bundleID = readBundleValue(app: app, key: "CFBundleIdentifier"), !bundleID.isEmpty {
-            _ = try? runCommand("/usr/bin/osascript", ["-e", "tell application id \"\(bundleID)\" to quit"], timeout: 20)
-        }
-        if await waitForExit(app: app, seconds: 15) { return }
+        // Resolve processes from the verified bundle path and signal them directly.
+        // Do not interpolate Info.plist values into AppleScript: --app may point at
+        // a locally crafted bundle whose identifier contains script syntax.
         for pid in mainProcessIDs(app: app) { kill(pid, SIGTERM) }
-        if await waitForExit(app: app, seconds: 5) { return }
+        if await waitForExit(app: app, seconds: 20) { return }
         for pid in mainProcessIDs(app: app) { kill(pid, SIGKILL) }
         _ = await waitForExit(app: app, seconds: 3)
     }
