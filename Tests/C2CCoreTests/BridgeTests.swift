@@ -68,6 +68,8 @@ final class BridgeTests: XCTestCase {
             let (response, _) = try await send(bridge, path: "/admin/info", headers: ["Authorization": "Bearer \(bridge.adminToken)", header: "203.0.113.1"])
             XCTAssertEqual(response.statusCode, 404)
         }
+        let (removedTunnelEndpoint, _) = try await send(bridge, path: "/admin/tunnel/start", method: "POST", headers: ["Authorization": "Bearer \(bridge.adminToken)"])
+        XCTAssertEqual(removedTunnelEndpoint.statusCode, 404)
         let access = try await token(bridge, scopes: "workspace.read")
         let headers = ["Authorization": "Bearer \(access)", "Accept": "application/json, text/event-stream"]
         let (initialized, initData) = try await send(bridge, path: "/mcp", method: "POST", json: ["jsonrpc": "2.0", "id": 2, "method": "initialize", "params": ["protocolVersion": "2025-03-26", "capabilities": [:], "clientInfo": ["name": "test", "version": "1"]]], headers: headers)

@@ -37,7 +37,7 @@ final class CLITests: XCTestCase {
     }
     func testLocalSetupReusesDaemonAndStopsCleanly() throws {
         let options = ["--workspace", project.path, "--json"]
-        let started = try run(["setup", "--no-tunnel", "--port", "0"] + options)
+        let started = try run(["setup", "--port", "0"] + options)
         XCTAssertEqual(started["ok"] as? Bool, true)
         XCTAssertEqual(started["local"] as? Bool, true)
         XCTAssertNotNil(started["pairingCode"] as? String)
@@ -71,6 +71,8 @@ final class CLITests: XCTestCase {
     func testInvalidArgumentsFailBeforeStartingDaemon() throws {
         for arguments in [
             ["start", "--port", "70000"],
+            ["start", "--tunnel"],
+            ["setup", "--no-tunnel"],
             ["start", "--setup-mode", "manual"],
             ["record", "--task", "t", "--iteration", "1.2"],
             ["record", "--task", "t", "--iteration", "0", "--changed-files", "-3"],

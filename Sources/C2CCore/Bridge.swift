@@ -4,7 +4,6 @@ import Darwin
 public final class Bridge {
     public let workspace: Workspace
     public let auth: AuthService
-    public let tunnel: TunnelManager
     public let adminToken = secureToken(prefix: "c2c_admin_")
     private let stateDirectory: URL
     private let server = HTTPServer()
@@ -17,7 +16,6 @@ public final class Bridge {
     public init(workspaceRoot: String, stateDirectory: URL = AppPaths.stateDirectory) throws {
         self.workspace = try Workspace(root: workspaceRoot); self.stateDirectory = stateDirectory
         self.auth = try AuthService(workspaceID: workspace.id, workspaceName: workspace.name, stateDirectory: stateDirectory)
-        self.tunnel = TunnelManager(workspaceID: workspace.id, stateDirectory: stateDirectory)
     }
     public func start(port: Int = 48765) throws {
         let directory = stateDirectory.appendingPathComponent("runtime")
@@ -34,10 +32,10 @@ public final class Bridge {
         try persist()
     }
     private func persist() throws {
-        try AppPaths.writeJSON(["service": c2cService, "version": c2cVersion, "workspaceId": workspace.id, "workspaceRoot": workspace.root, "pid": ProcessInfo.processInfo.processIdentifier, "port": port, "adminToken": adminToken, "publicUrl": tunnel.publicURL as Any? ?? NSNull(), "startedAt": startedAt], to: stateDirectory.appendingPathComponent("runtime/\(workspace.id).json"))
+        try AppPaths.writeJSON(["service": c2cService, "version": c2cVersion, "workspaceId": workspace.id, "workspaceRoot": workspace.root, "pid": ProcessInfo.processInfo.processIdentifier, "port": port, "adminToken": adminToken, "startedAt": startedAt], to: stateDirectory.appendingPathComponent("runtime/\(workspace.id).json"))
     }
     private func handle(_ request: HTTPRequest, mcp: MCPService) -> HTTPResponse {
-        let base = tunnel.publicURL ?? "http://127.0.0.1:\(port)"
+        let base = "http://127.0.0.1:\(port)"
         // Never derive OAuth issuer/redirects from attacker-controlled Host or forwarded headers.
         if request.path == "/health" && request.method == "GET" { return .json(["service": c2cService, "version": c2cVersion, "workspaceId": workspace.id, "status": "ok"]) }
         if request.path.hasPrefix("/admin/") {
@@ -45,16 +43,11 @@ public final class Bridge {
             guard request.remoteAddress == "127.0.0.1", !proxied, request.headers["authorization"] == "Bearer \(adminToken)" else { return HTTPResponse(status: 404) }
             switch (request.method, request.path) {
             case ("GET", "/admin/info"):
-                return .json(["service": c2cService, "version": c2cVersion, "workspaceId": workspace.id, "workspaceName": workspace.name, "workspaceRoot": workspace.root, "port": port, "publicUrl": tunnel.publicURL as Any? ?? NSNull(), "tunnel": tunnel.status(), "tokenCount": auth.tokenCount, "pairingActive": auth.pairingActive, "pid": ProcessInfo.processInfo.processIdentifier, "startedAt": startedAt])
+                return .json(["service": c2cService, "version": c2cVersion, "workspaceId": workspace.id, "workspaceName": workspace.name, "workspaceRoot": workspace.root, "port": port, "tokenCount": auth.tokenCount, "pairingActive": auth.pairingActive, "pid": ProcessInfo.processInfo.processIdentifier, "startedAt": startedAt])
             case ("POST", "/admin/pairing"): return .json(auth.createPairing())
             case ("POST", "/admin/revoke-all"):
                 do { return .json(["revoked": try auth.revokeAll()]) }
                 catch { return .json(["error": "persist_failed"], status: 500) }
-            case ("POST", "/admin/tunnel/start"):
-                do { let url = try tunnel.start(port: port); try persist(); return .json(["url": url]) }
-                catch { return .json(["error": "tunnel_failed", "message": error.localizedDescription], status: 500) }
-            case ("POST", "/admin/tunnel/stop"):
-                tunnel.stop(); try? persist(); return .json(["stopped": true])
             case ("POST", "/admin/shutdown"):
                 DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { self.stop(); self.onShutdown?() }
                 return .json(["shuttingDown": true])
@@ -75,7 +68,7 @@ public final class Bridge {
     public func stop() {
         lifecycle.lock(); defer { lifecycle.unlock() }
         guard !stopped else { return }; stopped = true
-        server.stop(); tunnel.stop()
+        server.stop()
         if workspaceLock >= 0 {
             let file = stateDirectory.appendingPathComponent("runtime/\(workspace.id).json")
             if AppPaths.readJSON(file)?["adminToken"] as? String == adminToken { try? FileManager.default.removeItem(at: file) }

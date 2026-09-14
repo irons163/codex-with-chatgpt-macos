@@ -20,12 +20,11 @@ State is in `~/Library/Application Support/codex-with-chatgpt-macos` unless `C2C
 
 1. Inspect `c2c status --workspace <path> --json` and `c2c prefs get --json`.
 2. On first connection, use the saved `setupMode` (auto/manual) or obtain the user's preference if absent. `prefs set --setup-mode auto|manual --json` saves the choice. Preserve an explicit browser preference from the user; otherwise use an available in-app browser.
-3. Public access requires `cloudflared`; on macOS its package is `brew install cloudflared`. `tunnel status --json` reports quick/named preference. Named mode is optional and requires a Cloudflare account/domain; `tunnel choose --mode named --zone <domain>` performs login, tunnel creation and DNS routing. Perform those external account changes only within the user's authorized setup request.
-4. Run `c2c setup --workspace <path> --json`. It starts a local daemon, establishes a public connection and emits `mcpUrl`, `connectorName`, `pairingCode` and expiry. `--no-tunnel` is for local development, not a remotely reachable ChatGPT connector.
-5. Add the returned URL to ChatGPT's MCP connection settings using OAuth and enter the one-time pairing code. Consult the actual browser UI for current labels. Login, CAPTCHA and 2FA belong to the user. Never read browser cookies or copy access/refresh/admin tokens into the browser.
-6. Save `prefs set --developer-mode --json` only after developer mode is confirmed enabled. Confirm ChatGPT can invoke `workspace_info` and read an allowed file before declaring the connection verified.
+3. Run `c2c setup --workspace <path> --json`. It starts a loopback-only daemon and emits a local `mcpUrl`, `pairingCode` and expiry. The MCP URL is usable only by clients on the same Mac; there is no public connection mode.
+4. Prefer `c2c entry --workspace <path>` for the Codex/ChatGPT desktop workflow. It injects the workspace attachment and per-session Quick Chat controls over CDP without MCP setup.
+5. Save `prefs set --developer-mode --json` only after developer mode is confirmed enabled. For a local MCP client, confirm it can invoke `workspace_info` and read an allowed file before declaring the connection verified.
 
-Use `doctor --json` for repair, or `doctor --no-fix --json` for observation. Inspect `report.bridge`, `report.mcp`, `report.tunnel` and `chatgptRepair`. Unknown bridge identity is not a stopped bridge: do not force-kill its PID or start another copy. When a public URL changes, update only this workspace's named connector; preserve other workspaces' connections. A failed named connection is not evidence that its stable hostname changed.
+Use `doctor --json` for repair, or `doctor --no-fix --json` for observation. Inspect `report.bridge` and `report.mcp`. Unknown bridge identity is not a stopped bridge: do not force-kill its PID or start another copy.
 
 `setup`, `doctor` with fixes, and `sandbox-allow` maintain the state directory entry in Codex's writable roots. Do not change unrelated sandbox or approval settings. To disconnect, use `unpair` to revoke access and `stop` to stop the local bridge.
 

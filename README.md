@@ -2,7 +2,7 @@
 
 將 `codex-with-chatgpt` 的 TypeScript CLI 與唯讀 MCP 橋接服務移植為原生 Swift。ChatGPT 負責規劃與審查，Codex 執行程式修改；ChatGPT 透過經授權的 MCP 工具讀取工作區。
 
-**macOS 13 以上，Apple Silicon / Intel。無 Node.js、npm 或第三方 Swift 套件依賴。** 這個專案保留原本的 `c2c` 命令列操作模式，以 Swift 標準工具鏈建置。公開連線另外需要 `cloudflared`。
+**macOS 13 以上，Apple Silicon / Intel。無 Node.js、npm 或第三方 Swift 套件依賴。** 這個專案保留原本的 `c2c` 命令列操作模式，以 Swift 標準工具鏈建置。
 
 ## 建置與執行
 
@@ -28,8 +28,7 @@ swift test
 ## 使用（直接 CDP 注入）
 
 在 Xcode 開啟 `Package.swift`、選擇 `c2c` scheme 後直接按 Run 即可；程式會把該
-Swift Package 根目錄當成工作區，不必設定 Scheme arguments，也不需要 `cloudflared`、
-MCP、OAuth 或配對碼。從終端機啟動也只需：
+Swift Package 根目錄當成工作區，不必設定 Scheme arguments，也不需要 MCP、OAuth 或配對碼。從終端機啟動也只需：
 
 ```sh
 cd /path/to/project
@@ -54,33 +53,17 @@ c2c --workspace /path/to/project --app /Applications/ChatGPT.app
 ```sh
 c2c workspace --workspace /path/to/project --json
 c2c start --workspace /path/to/project --json
-c2c setup --workspace /path/to/project --no-tunnel --json
+c2c setup --workspace /path/to/project --json
 c2c status --workspace /path/to/project --json
 c2c doctor --workspace /path/to/project --no-fix --json
 c2c stop --workspace /path/to/project --json
 ```
 
-`start` 預設只啟動本機橋接；`setup` 預設也建立公開連線並產生五分鐘有效的配對碼。`setup --no-tunnel` 適合本機開發，ChatGPT 遠端連接需使用公開 HTTPS 位址。
-
-```sh
-brew install cloudflared
-c2c setup --workspace /path/to/project --json
-```
-
-在 ChatGPT 的 MCP 連線設定加入輸出的 `mcpUrl`，選擇 OAuth，於授權頁輸入 `pairingCode`。登入與建立 ChatGPT 連線仍由使用者或 Codex 的瀏覽器工具完成，CLI 不接觸瀏覽器 cookie。
-
-固定網址可用：
-
-```sh
-c2c tunnel choose --mode named --zone example.com --workspace /path/to/project
-c2c start --tunnel --workspace /path/to/project
-```
-
-這個命令會使用 Cloudflare 登入、建立 Tunnel 與 DNS 路由。若選擇臨時網址：`c2c tunnel choose --mode quick`。Named 設定失敗會回報錯誤，不會悄悄切換或覆蓋既有設定。
+`start` 與 `setup` 都只啟動綁定 `127.0.0.1` 的本機橋接；`setup` 另外產生五分鐘有效的配對碼。輸出的 `mcpUrl` 僅供同一台 Mac 上的 MCP client 使用，不提供公開連線。
 
 ## 命令與狀態
 
-保留 `setup`、`start`、`serve`、`stop`、`restart`、`status`、`doctor`、`pair`、`unpair`、`logs`、`workspace`、`entry`、`sandbox-allow`、`update-check`、`session`、`prefs`、`record`、`tunnel`。完整參數見 `c2c --help`。
+保留 `setup`、`start`、`serve`、`stop`、`restart`、`status`、`doctor`、`pair`、`unpair`、`logs`、`workspace`、`entry`、`sandbox-allow`、`update-check`、`session`、`prefs`、`record`。完整參數見 `c2c --help`。
 
 ## 工作目錄入口（明確指定 entry 命令）
 
@@ -113,7 +96,7 @@ Swift 版預設狀態位於 `~/Library/Application Support/codex-with-chatgpt-ma
 
 MCP 提供九個工具：`workspace_info`、`list_directory`、`read_file`、`search_workspace`、`git_status`、`git_diff`、`test_status`、`execution_summary`、`execution_output`。
 
-- HTTP 僅綁定 `127.0.0.1`；公開連線由 Cloudflare Tunnel 提供。
+- HTTP 僅綁定 `127.0.0.1`，沒有公開連線功能。
 - OAuth 使用配對碼、PKCE S256、工作區與工具 scope 檢查。
 - 敏感檔案、工作區外路徑與逃逸 symlink 不可讀取；`.c2cignore` 可再增加排除規則。
 - 執行輸出經命令白名單與敏感內容清洗後才可由 MCP 讀取。

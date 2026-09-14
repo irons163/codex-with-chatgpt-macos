@@ -6,8 +6,8 @@ struct Arguments {
     var words: [String] = []
     var options: [String: String] = [:]
     var flags: Set<String> = []
-    static let boolean: Set<String> = ["json", "tunnel", "no-tunnel", "no-fix", "force", "developer-mode", "clear-checkpoint", "help", "version"]
-    static let valued: Set<String> = ["workspace", "port", "lines", "url", "title", "task", "iteration", "state", "mode", "project-url", "connector-name", "protocol-state", "waiting-for", "goal", "completed-subtasks", "known-issues", "next-step", "setup-mode", "changed-files", "tests", "exit-status", "notes", "command", "output", "output-file", "exit-code", "zone", "hostname", "app", "debug-port"]
+    static let boolean: Set<String> = ["json", "no-fix", "force", "developer-mode", "clear-checkpoint", "help", "version"]
+    static let valued: Set<String> = ["workspace", "port", "lines", "url", "title", "task", "iteration", "state", "mode", "project-url", "connector-name", "protocol-state", "waiting-for", "goal", "completed-subtasks", "known-issues", "next-step", "setup-mode", "changed-files", "tests", "exit-status", "notes", "command", "output", "output-file", "exit-code", "app", "debug-port"]
     init(_ raw: [String]) throws {
         var i = 0
         while i < raw.count {
@@ -32,17 +32,13 @@ struct Arguments {
         switch command {
         case "serve": allowed = ["workspace", "port", "json"]
         case "entry": allowed = ["workspace", "json", "app", "debug-port"]
-        case "start", "restart": allowed = shared.union(["tunnel", "port"])
-        case "setup": allowed = shared.union(["no-tunnel", "port"])
+        case "start", "setup", "restart": allowed = shared.union(["port"])
         case "doctor": allowed = shared.union(["no-fix"])
         case "logs": allowed = shared.union(["lines"])
         case "session" where subcommand == "set": allowed = shared.union(["url", "title", "task", "iteration", "state", "mode", "project-url", "connector-name", "protocol-state", "waiting-for", "goal", "completed-subtasks", "known-issues", "next-step", "clear-checkpoint"])
         case "prefs" where subcommand == "set": allowed = ["json", "developer-mode", "setup-mode"]
         case "prefs", "sandbox-allow": allowed = ["json"]
         case "record": allowed = shared.union(["task", "iteration", "changed-files", "tests", "exit-status", "notes", "command", "output", "output-file", "exit-code"])
-        case "tunnel" where subcommand == "choose": allowed = shared.union(["mode", "zone", "hostname"])
-        case "tunnel" where subcommand == "login": allowed = ["json"]
-        case "tunnel": allowed = shared.union(["zone"])
         case "update-check": allowed = ["json", "force"]
         default: allowed = shared
         }
@@ -86,9 +82,9 @@ struct Arguments {
 
       (no command)               Inject into Codex/ChatGPT using this directory
 
-      setup [--no-tunnel]         Start bridge, tunnel and one-time pairing
-      start [--tunnel]            Start or reuse the workspace bridge
-      stop | restart [--tunnel]   Manage the background bridge
+      setup                       Start local bridge and one-time pairing
+      start                       Start or reuse the local workspace bridge
+      stop | restart              Manage the background bridge
       status | doctor [--no-fix]  Inspect or repair the connection
       pair | unpair              Create a pairing code or revoke authorization
       workspace                  Inspect the current workspace
@@ -97,7 +93,6 @@ struct Arguments {
       logs [--lines N]            Show private bridge logs
       session get|set|clear       Remember ChatGPT project and conversation
       prefs get|set               Remember developer mode and setup preferences
-      tunnel status|choose|login  Configure Cloudflare quick/named tunnels
       sandbox-allow              Add state directory to Codex writable_roots
       record                     Record execution evidence for MCP review
       update-check [--force]     Check this Swift checkout's configured upstream
@@ -111,9 +106,8 @@ struct Arguments {
     Record: --task ID --iteration N [--changed-files FILES|COUNT] [--tests TEXT]
       [--exit-status ok|failed|blocked] [--command TEXT --output-file PATH]
       [--output TEXT] [--exit-code N] [--notes TEXT]
-    Tunnel choose: --mode quick|named [--zone DOMAIN] [--hostname HOST]
     Prefs set: --developer-mode [--setup-mode auto|manual]
-    Requires macOS 13+. No Node.js runtime. Cloudflared needed for public access.
+    Requires macOS 13+. No Node.js runtime.
     """
     static func emit(_ value: [String: Any], json: Bool, message: String? = nil) {
         if !json, let message { print(message); return }
@@ -134,7 +128,7 @@ struct Arguments {
         // makes Xcode's Run button useful without editing a Scheme first.
         let command = args.words.first ?? "entry"
         let sub = args.words.count > 1 ? args.words[1] : "get"
-        guard args.words.count <= (["session", "prefs", "tunnel"].contains(command) ? 2 : 1) else { throw C2CError("Unexpected positional argument") }
+        guard args.words.count <= (["session", "prefs"].contains(command) ? 2 : 1) else { throw C2CError("Unexpected positional argument") }
         try args.validate(command: command, subcommand: sub)
         if ["serve", "start", "setup", "restart"].contains(command) {
             _ = try args.integer("port", default: 48765, minimum: 0, maximum: 65535)
@@ -149,7 +143,6 @@ struct Arguments {
             return
         }
         if command == "update-check" { try updateCheck(args, state: state); return }
-        if command == "tunnel", sub == "login" { try TunnelManager.login(); emit(["ok": true, "loggedIn": TunnelManager.loggedIn], json: json); return }
         let root = args.options["workspace"] ?? defaultWorkspacePath()
         let workspace = try Workspace(root: root)
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
@@ -220,18 +213,11 @@ struct Arguments {
                 catch { sandbox = ["ok": false, "error": error.localizedDescription] }
             }
             let runtime = try await Daemon.ensure(workspace: workspace, stateDirectory: state, executable: executable, port: args.integer("port", default: 48765, minimum: 0, maximum: 65535))
-            let useTunnel = command == "setup" ? !args.flags.contains("no-tunnel") : args.flags.contains("tunnel")
-            if useTunnel { _ = try await Daemon.admin(runtime, route: "/admin/tunnel/start", method: "POST") }
-            let info = try await Daemon.admin(runtime, route: "/admin/info")
-            let publicURL = info["publicUrl"] as? String
-            let mcpURL = publicURL.map { $0 + "/mcp" }
-            let connectorName = try persistEndpoint(workspace: workspace, runtime: runtime, publicURL: publicURL, state: state)
-            var result: [String: Any] = ["ok": true, "workspaceId": workspace.id, "workspaceName": workspace.name, "port": runtime["port"]!, "mcpUrl": mcpURL as Any? ?? NSNull(), "connectorName": connectorName]
+            let mcpURL = "http://127.0.0.1:\(runtime["port"]!)/mcp"
+            var result: [String: Any] = ["ok": true, "workspaceId": workspace.id, "workspaceName": workspace.name, "port": runtime["port"]!, "mcpUrl": mcpURL, "local": true]
             if command == "setup" {
                 let pairing = try await Daemon.admin(runtime, route: "/admin/pairing", method: "POST")
-                result["mcpUrl"] = mcpURL ?? "http://127.0.0.1:\(runtime["port"]!)/mcp"
-                result["local"] = mcpURL == nil; result["pairingCode"] = pairing["code"]; result["pairingExpiresAt"] = pairing["expiresAt"]; result["sandbox"] = sandbox
-                result["tunnel"] = TunnelManager.state(workspace.id, state)
+                result["pairingCode"] = pairing["code"]; result["pairingExpiresAt"] = pairing["expiresAt"]; result["sandbox"] = sandbox
             }
             emit(result, json: json)
         case "stop": emit(["ok": true, "stopped": try await Daemon.stop(workspaceID: workspace.id, stateDirectory: state)], json: json)
@@ -277,35 +263,14 @@ struct Arguments {
             if args.options["exit-code"] != nil { values["exitCode"] = try args.integer("exit-code") }
             if let file = args.options["output-file"] { let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: file)); defer { try? handle.close() }; values["output"] = String(decoding: try handle.read(upToCount: 256 * 1024) ?? Data(), as: UTF8.self) }
             emit(try ExecutionStore(workspaceID: workspace.id, stateDirectory: state).record(values), json: json)
-        case "tunnel":
-            if sub == "choose" {
-                let settings = try TunnelManager.choose(mode: args.require("mode"), workspaceID: workspace.id, workspaceName: workspace.name, stateDirectory: state, zone: args.options["zone"], hostname: args.options["hostname"])
-                _ = try await Daemon.stop(workspaceID: workspace.id, stateDirectory: state)
-                emit(["ok": true, "state": settings, "fallback": false], json: json)
-            } else if ["get", "status"].contains(sub) {
-                let settings = TunnelManager.state(workspace.id, state)
-                var result = settings
-                result["ok"] = true; result["needsChoice"] = settings["preference"] as? String == "unset" || settings["askedAt"] == nil
-                result["loggedIn"] = TunnelManager.loggedIn; result["namedReady"] = settings["preference"] as? String == "named" && settings["hostname"] != nil && settings["tunnelName"] != nil
-                if let rawZone = args.options["zone"] { let zone = try TunnelManager.zone(rawZone); result["suggestedHostname"] = try TunnelManager.suggestedHostname(zone: zone, name: workspace.name, id: workspace.id) }
-                emit(result, json: json)
-            } else { throw C2CError("Unknown tunnel command: \(sub)") }
         case "doctor": try await doctor(args, workspace: workspace, state: state, executable: executable)
         default: throw C2CError("Unknown command: \(command). Run c2c --help")
         }
     }
-    static func persistEndpoint(workspace: Workspace, runtime: [String: Any], publicURL: String?, state: URL) throws -> String {
-        let file = state.appendingPathComponent("endpoints/\(workspace.id).json")
-        let previous = AppPaths.readJSON(file)
-        let label = String(workspace.name.replacingOccurrences(of: "[^\\p{L}\\p{N}._ -]", with: "", options: .regularExpression).prefix(40))
-        let name = previous?["connectorName"] as? String ?? (previous == nil ? "Codex with ChatGPT · \(label.isEmpty ? String(workspace.id.prefix(6)) : label)" : "Codex with ChatGPT")
-        if let publicURL { try AppPaths.writeJSON(["workspaceId": workspace.id, "port": runtime["port"]!, "publicUrl": publicURL, "mcpUrl": publicURL + "/mcp", "connectorName": name, "savedAt": timestamp()], to: file) }
-        return name
-    }
     static func doctor(_ args: Arguments, workspace: Workspace, state: URL, executable: String) async throws {
         let fix = !args.flags.contains("no-fix")
         var report: [String: [String: Any]] = ["platform": ["ok": true, "detail": "Swift native / macOS"], "workspace": ["ok": true, "detail": workspace.name], "git": ["ok": findExecutable("git") != nil]]
-        var repairs: [String] = []; var chatgptRepair: [String: Any] = ["needed": false]; var namedRepair: [String: Any] = ["needed": false]
+        var repairs: [String] = []
         if fix {
             do { let result = try SandboxConfig.ensure(stateDirectory: state, configURL: configOverride); report["sandbox"] = ["ok": true]; if result["added"] as? Bool == true { repairs.append("Added state directory to Codex sandbox") } }
             catch { report["sandbox"] = ["ok": false, "detail": error.localizedDescription] }
@@ -321,43 +286,8 @@ struct Arguments {
             let (status, _) = try await Daemon.request(port: runtime["port"] as! Int, route: "/mcp", method: "POST")
             report["mcp"] = ["ok": status == 401, "detail": "Unauthenticated request: \(status)"]
             report["oauth"] = ["ok": status == 401]
-            var info = try await Daemon.admin(runtime, route: "/admin/info")
-            let previous = AppPaths.readJSON(state.appendingPathComponent("endpoints/\(workspace.id).json"))
-            let expected = previous?["publicUrl"] is String || TunnelManager.state(workspace.id, state)["preference"] as? String == "named"
-            var url = info["publicUrl"] as? String
-            var reachable = await publicHealth(url, workspaceID: workspace.id)
-            if expected && !reachable && fix {
-                do {
-                    _ = try await Daemon.admin(runtime, route: "/admin/tunnel/stop", method: "POST")
-                    _ = try await Daemon.admin(runtime, route: "/admin/tunnel/start", method: "POST")
-                    info = try await Daemon.admin(runtime, route: "/admin/info"); url = info["publicUrl"] as? String
-                    reachable = await publicHealth(url, workspaceID: workspace.id); repairs.append("Restarted public tunnel")
-                } catch { report["tunnel"] = ["ok": false, "detail": error.localizedDescription] }
-            }
-            report["tunnel"] = report["tunnel"] ?? ["ok": url == nil && !expected ? true : reachable, "detail": url ?? (expected ? "Public connection unavailable" : "Local mode")]
-            if let url, reachable {
-                let next = url + "/mcp"; let old = previous?["mcpUrl"] as? String
-                let action = old == nil ? "create" : (old == next ? "none" : "update")
-                let name: String
-                if fix { name = try persistEndpoint(workspace: workspace, runtime: runtime, publicURL: url, state: state) }
-                else { name = previous?["connectorName"] as? String ?? "Codex with ChatGPT · \(workspace.name)" }
-                chatgptRepair = ["needed": action != "none", "connectorAction": action, "connectorName": name, "mcpUrl": next, "previousMcpUrl": old as Any? ?? NSNull()]
-                if action != "none", fix { let pairing = try await Daemon.admin(runtime, route: "/admin/pairing", method: "POST"); chatgptRepair["pairingCode"] = pairing["code"]; chatgptRepair["pairingExpiresAt"] = pairing["expiresAt"] }
-            }
         }
-        let savedTunnel = TunnelManager.state(workspace.id, state)
-        if savedTunnel["preference"] as? String == "named", report["tunnel"]?["ok"] as? Bool != true {
-            namedRepair = ["needed": true, "hostname": savedTunnel["hostname"] as Any? ?? NSNull(), "userMessage": "The stable connection is unavailable. Verify Cloudflare login and the named tunnel; keep the existing connector while its hostname is unchanged."]
-        }
-        emit(["ok": report.values.allSatisfy { $0["ok"] as? Bool == true }, "report": report, "repairs": repairs, "chatgptRepair": chatgptRepair, "namedRepair": namedRepair], json: args.flags.contains("json"))
-    }
-    static func publicHealth(_ raw: String?, workspaceID: String) async -> Bool {
-        guard let raw, let url = URL(string: raw + "/health"), url.scheme == "https" else { return false }
-        do {
-            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 8))
-            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            return (response as? HTTPURLResponse)?.statusCode == 200 && body?["service"] as? String == c2cService && body?["workspaceId"] as? String == workspaceID
-        } catch { return false }
+        emit(["ok": report.values.allSatisfy { $0["ok"] as? Bool == true }, "report": report, "repairs": repairs], json: args.flags.contains("json"))
     }
     static func updateCheck(_ args: Arguments, state: URL) throws {
         // Never point Swift installations at the TypeScript upstream or overwrite a native build.
