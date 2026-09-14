@@ -1,0 +1,402 @@
+name: Release
+
+"on":
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published GitHub Release tag
+        required: true
+        type: string
+      channel:
+        description: Update channel
+        required: true
+        default: stable
+        type: choice
+        options: [stable, beta]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-with-chatgpt-release
+  cancel-in-progress: false
+
+env:
+  UPDATE_REPOSITORY: irons163/codex-with-chatgpt-macos
+  SPARKLE_VERSION: "2.9.1"
+  SPARKLE_ARCHIVE_SHA256: c0dde519fd2a43ddfc6a1eb76aec284d7d888fe281414f9177de3164d98ba4c7
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      release_version: ${{ steps.release.outputs.release_version }}
+      build_version: ${{ steps.release.outputs.build_version }}
+      minimum_system_version: ${{ steps.release.outputs.minimum_system_version }}
+      channel: ${{ steps.release.outputs.channel }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EVENT_RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "$UPDATE_REPOSITORY" ]] \
+            || { echo "Workflow is bound to $UPDATE_REPOSITORY." >&2; exit 1; }
+
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            RELEASE_TAG="$EVENT_RELEASE_TAG"
+            [[ "$EVENT_RELEASE_PRERELEASE" == "true" ]] && CHANNEL=beta || CHANNEL=stable
+          else
+            RELEASE_TAG="$INPUT_RELEASE_TAG"
+            CHANNEL="$INPUT_CHANNEL"
+          fi
+          [[ "$RELEASE_TAG" =~ ^[vV]?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] \
+            || { echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+          [[ "$CHANNEL" == stable || "$CHANNEL" == beta ]] \
+            || { echo "Invalid channel: $CHANNEL" >&2; exit 1; }
+
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          TAG_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
+          [[ "$SOURCE_SHA" == "$TAG_SHA" ]] \
+            || { echo "Checkout does not match immutable tag." >&2; exit 1; }
+          git fetch --no-tags origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "origin/$DEFAULT_BRANCH" \
+            || { echo "Release source is not on $DEFAULT_BRANCH." >&2; exit 1; }
+
+          RELEASE_JSON="$(gh api "repos/${UPDATE_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          [[ "$(jq -r '.draft' <<<"$RELEASE_JSON")" == false ]] \
+            || { echo "Release is still a draft." >&2; exit 1; }
+          IS_PRERELEASE="$(jq -r '.prerelease' <<<"$RELEASE_JSON")"
+          [[ "$CHANNEL" == beta && "$IS_PRERELEASE" == true \
+             || "$CHANNEL" == stable && "$IS_PRERELEASE" == false ]] \
+            || { echo "Channel does not match prerelease state." >&2; exit 1; }
+
+          LATEST_STABLE="$(gh api "repos/${UPDATE_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+          if [[ "$CHANNEL" == stable && "$LATEST_STABLE" != "$RELEASE_TAG" ]]; then
+            echo "Stable release must be GitHub's latest release." >&2
+            exit 1
+          fi
+          if [[ "$CHANNEL" == beta && -z "$LATEST_STABLE" ]]; then
+            echo "Publish one Stable release before the first Beta." >&2
+            exit 1
+          fi
+
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          RELEASE_VERSION="${RELEASE_VERSION#V}"
+          INFO_JSON="$(python3 - <<'PY'
+          import json, plistlib
+          with open("Packaging/Info.plist", "rb") as handle:
+              info = plistlib.load(handle)
+          required = ["CFBundleShortVersionString", "CFBundleVersion", "LSMinimumSystemVersion"]
+          missing = [key for key in required if not str(info.get(key, "")).strip()]
+          if missing:
+              raise SystemExit(f"Info.plist is missing: {', '.join(missing)}")
+          if info.get("SUAllowsInsecureUpdates") is True:
+              raise SystemExit("Source Info.plist must not allow insecure updates.")
+          print(json.dumps({key: str(info[key]) for key in required}))
+          PY
+          )"
+          INFO_VERSION="$(jq -r '.CFBundleShortVersionString' <<<"$INFO_JSON")"
+          BUILD_VERSION="$(jq -r '.CFBundleVersion' <<<"$INFO_JSON")"
+          MINIMUM_SYSTEM_VERSION="$(jq -r '.LSMinimumSystemVersion' <<<"$INFO_JSON")"
+          [[ "$INFO_VERSION" == "$RELEASE_VERSION" ]] \
+            || { echo "Tag and CFBundleShortVersionString differ." >&2; exit 1; }
+          [[ "$BUILD_VERSION" =~ ^[0-9]+$ ]] \
+            || { echo "CFBundleVersion must be an integer." >&2; exit 1; }
+          [[ "$CHANNEL" == beta && "$RELEASE_VERSION" == *-* \
+             || "$CHANNEL" == stable && "$RELEASE_VERSION" != *-* ]] \
+            || { echo "Version suffix does not match channel." >&2; exit 1; }
+
+          python3 - <<'PY'
+          import base64, binascii, os
+          try:
+              key = base64.b64decode(os.environ.get("SPARKLE_PUBLIC_ED_KEY", ""), validate=True)
+          except (binascii.Error, ValueError) as error:
+              raise SystemExit(f"Invalid SPARKLE_PUBLIC_ED_KEY: {error}")
+          if len(key) != 32:
+              raise SystemExit("SPARKLE_PUBLIC_ED_KEY must decode to 32 bytes.")
+          PY
+          RESOLVED="$(jq -r '.pins[] | select(.identity == "sparkle") | .state.version' Package.resolved)"
+          [[ "$RESOLVED" == "$SPARKLE_VERSION" ]] \
+            || { echo "Resolved Sparkle version differs from workflow." >&2; exit 1; }
+          grep -Fq "exact: \"$SPARKLE_VERSION\"" Package.swift \
+            || { echo "Package.swift must pin Sparkle exactly." >&2; exit 1; }
+
+          CACHE="$(mktemp -d)"
+          trap 'rm -rf "$CACHE"' EXIT
+          ASSETS="$(gh api --paginate "repos/${UPDATE_REPOSITORY}/releases?per_page=100" --jq '.[] | select(.draft == false) | .assets[]? | select(.name | test("^appcast(-beta)?-(arm64|x86_64)\\.xml$")) | [.id,.name] | @tsv')"
+          index=0
+          while IFS=$'\t' read -r id name; do
+            [[ -n "$id" ]] || continue
+            gh api -H 'Accept: application/octet-stream' "repos/${UPDATE_REPOSITORY}/releases/assets/$id" > "$CACHE/$index-$name"
+            index=$((index + 1))
+          done <<< "$ASSETS"
+          python3 scripts/validate-release-build-order.py \
+            --appcast-directory "$CACHE" \
+            --current-build "$BUILD_VERSION" \
+            --current-version "$RELEASE_VERSION" \
+            --current-tag "$RELEASE_TAG"
+
+          {
+            echo "release_tag=$RELEASE_TAG"
+            echo "release_version=$RELEASE_VERSION"
+            echo "build_version=$BUILD_VERSION"
+            echo "minimum_system_version=$MINIMUM_SYSTEM_VERSION"
+            echo "channel=$CHANNEL"
+            echo "source_sha=$SOURCE_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: Select latest Xcode
+        shell: bash
+        run: |
+          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -n 1)"
+          [[ -n "$XCODE_APP" ]] || exit 1
+          echo "DEVELOPER_DIR=${XCODE_APP}/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Validate and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+          scripts/test-generate-sparkle-appcast.sh
+          scripts/test-validate-release-build-order.sh
+          swift test
+
+  build:
+    needs: [prepare, verify]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    environment: release-production
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: apple-silicon
+            runner: macos-15
+          - arch: x86_64
+            label: intel
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: Select Xcode and verify architecture
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "$TARGET_ARCH" ]] || exit 1
+          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -n 1)"
+          [[ -n "$XCODE_APP" ]] || exit 1
+          echo "DEVELOPER_DIR=${XCODE_APP}/Contents/Developer" >> "$GITHUB_ENV"
+
+      - name: Configure Developer ID and notarization
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_TEAM_ID APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_PRIVATE_KEY_BASE64; do
+            [[ -n "${!name:-}" ]] || { echo "Missing $name" >&2; exit 1; }
+          done
+          KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          python3 - "$CERTIFICATE_PATH" "$API_KEY_PATH" <<'PY'
+          import base64, os, sys
+          open(sys.argv[1], "wb").write(base64.b64decode(os.environ["APPLE_CERTIFICATE_P12_BASE64"], validate=True))
+          open(sys.argv[2], "wb").write(base64.b64decode(os.environ["APPLE_API_PRIVATE_KEY_BASE64"], validate=True))
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          IDENTITIES="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH")"
+          CODE_SIGN_IDENTITY="$(sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' <<<"$IDENTITIES" | grep "($APPLE_TEAM_ID)" | head -n 1)"
+          [[ -n "$CODE_SIGN_IDENTITY" ]] || { echo "No matching Developer ID identity." >&2; exit 1; }
+          xcrun notarytool store-credentials C2C_NOTARY --key "$API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
+          echo "RELEASE_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Download verified Sparkle signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/Sparkle-$SPARKLE_VERSION.tar.xz"
+          TOOLS="$RUNNER_TEMP/sparkle-tools"
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$SPARKLE_ARCHIVE_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          mkdir -p "$TOOLS"
+          tar -xJf "$ARCHIVE" -C "$TOOLS"
+          SIGN_UPDATE="$(find "$TOOLS" -type f -path '*/bin/sign_update' | head -n 1)"
+          [[ -n "$SIGN_UPDATE" ]] || exit 1
+          chmod +x "$SIGN_UPDATE"
+          codesign --verify --deep --strict --verbose=2 "$SIGN_UPDATE"
+          echo "SPARKLE_SIGN_UPDATE=$SIGN_UPDATE" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and sign update
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+          ARCH_LABEL: ${{ matrix.label }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          NOTARY_PROFILE: C2C_NOTARY
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: scripts/build-release-dmg.sh
+
+      - name: Upload architecture artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.label }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Remove release credentials
+        if: always()
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          set +e
+          [[ -z "${RELEASE_KEYCHAIN_PATH:-}" ]] || security delete-keychain "$RELEASE_KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+
+  publish:
+    needs: [prepare, verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          ARM_DMG="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-apple-silicon.dmg"
+          INTEL_DMG="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-intel.dmg"
+          ARM_DSYM="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-apple-silicon.dSYM.zip"
+          INTEL_DSYM="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-intel.dSYM.zip"
+          for path in "$ARM_DMG" "$INTEL_DMG" "$ARM_DSYM" "$INTEL_DSYM" "$ARM_DMG.edSignature" "$INTEL_DMG.edSignature"; do
+            [[ -s "$path" ]] || { echo "Missing $path" >&2; exit 1; }
+          done
+          shasum -a 256 "$ARM_DMG" "$INTEL_DMG" "$ARM_DSYM" "$INTEL_DSYM" \
+            | sed 's#  artifacts/#  #' > artifacts/SHA256SUMS
+          gh release upload "$RELEASE_TAG" "$ARM_DMG" "$INTEL_DMG" "$ARM_DSYM" "$INTEL_DSYM" artifacts/SHA256SUMS \
+            --repo "$UPDATE_REPOSITORY" --clobber
+
+      - name: Generate and publish signed appcasts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          MINIMUM_SYSTEM_VERSION: ${{ needs.prepare.outputs.minimum_system_version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          set -euo pipefail
+          ARM_DMG="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-apple-silicon.dmg"
+          INTEL_DMG="artifacts/CodexWithChatGPT-${RELEASE_VERSION}-intel.dmg"
+          RELEASE_JSON="$(gh api "repos/${UPDATE_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          asset_url() { jq -r --arg name "$1" '.assets[] | select(.name == $name) | .browser_download_url' <<<"$RELEASE_JSON" | head -n 1; }
+          ARM_URL="$(asset_url "$(basename "$ARM_DMG")")"
+          INTEL_URL="$(asset_url "$(basename "$INTEL_DMG")")"
+          [[ -n "$ARM_URL" && -n "$INTEL_URL" ]] || { echo "Cannot resolve uploaded DMG URLs." >&2; exit 1; }
+          OUTPUT_DIR=appcasts \
+          APP_NAME='Codex with ChatGPT' \
+          REPOSITORY_SLUG="$UPDATE_REPOSITORY" \
+          RELEASE_TAG="$RELEASE_TAG" \
+          RELEASE_NAME="$(jq -r '.name // ""' <<<"$RELEASE_JSON")" \
+          RELEASE_NOTES="$(jq -r '.body // ""' <<<"$RELEASE_JSON")" \
+          BUILD_VERSION="$BUILD_VERSION" \
+          PUBLISHED_AT="$(jq -r '.published_at // ""' <<<"$RELEASE_JSON")" \
+          MINIMUM_SYSTEM_VERSION="$MINIMUM_SYSTEM_VERSION" \
+          CHANNEL_LABEL="$CHANNEL" \
+          ARM64_URL="$ARM_URL" \
+          ARM64_SIZE="$(wc -c < "$ARM_DMG" | tr -d '[:space:]')" \
+          ARM64_ED_SIGNATURE="$(tr -d '[:space:]' < "$ARM_DMG.edSignature")" \
+          X86_64_URL="$INTEL_URL" \
+          X86_64_SIZE="$(wc -c < "$INTEL_DMG" | tr -d '[:space:]')" \
+          X86_64_ED_SIGNATURE="$(tr -d '[:space:]' < "$INTEL_DMG.edSignature")" \
+            scripts/generate-sparkle-appcast.sh
+
+          if [[ "$CHANNEL" == beta ]]; then
+            mv appcasts/appcast-arm64.xml appcasts/appcast-beta-arm64.xml
+            mv appcasts/appcast-x86_64.xml appcasts/appcast-beta-x86_64.xml
+            HOST_TAG="$(gh api "repos/${UPDATE_REPOSITORY}/releases/latest" --jq '.tag_name')"
+            FEEDS=(appcasts/appcast-beta-arm64.xml appcasts/appcast-beta-x86_64.xml)
+          else
+            cp appcasts/appcast-arm64.xml appcasts/appcast-beta-arm64.xml
+            cp appcasts/appcast-x86_64.xml appcasts/appcast-beta-x86_64.xml
+            HOST_TAG="$RELEASE_TAG"
+            FEEDS=(appcasts/appcast-arm64.xml appcasts/appcast-x86_64.xml appcasts/appcast-beta-arm64.xml appcasts/appcast-beta-x86_64.xml)
+          fi
+          gh release upload "$HOST_TAG" "${FEEDS[@]}" --repo "$UPDATE_REPOSITORY" --clobber

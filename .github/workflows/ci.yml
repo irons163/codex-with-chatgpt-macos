@@ -1,0 +1,85 @@
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select latest Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -n 1)"
+          [[ -n "$XCODE_APP" ]] || { echo "No Xcode installation found." >&2; exit 1; }
+          echo "DEVELOPER_DIR=${XCODE_APP}/Contents/Developer" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="${XCODE_APP}/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Verify native architecture
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "$EXPECTED_ARCH" ]] || { echo "Wrong runner architecture." >&2; exit 1; }
+
+      - name: Validate release scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+          scripts/test-generate-sparkle-appcast.sh
+          scripts/test-validate-release-build-order.sh
+
+      - name: Build and test
+        run: |
+          swift build
+          swift test
+
+      - name: Package app
+        shell: bash
+        run: CONFIGURATION=release ARCHS="${{ matrix.arch }}" scripts/package-app.sh
+
+      - name: Verify app bundle
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          APP="dist/CodexWithChatGPT.app"
+          for binary in "$APP/Contents/MacOS/CodexWithChatGPT" "$APP/Contents/Helpers/c2c"; do
+            [[ -x "$binary" ]] || { echo "Missing $binary" >&2; exit 1; }
+            [[ "$(lipo -archs "$binary")" == "$EXPECTED_ARCH" ]] \
+              || { echo "Unexpected architecture for $binary" >&2; exit 1; }
+          done
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          otool -L "$APP/Contents/MacOS/CodexWithChatGPT" \
+            | grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle'

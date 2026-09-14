@@ -5,3 +5,5 @@ dist/
 uploads/
 .env
 .env.*
+__pycache__/
+*.pyc

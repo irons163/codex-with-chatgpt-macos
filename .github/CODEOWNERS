@@ -1,0 +1,13 @@
+# Release automation and supply-chain-sensitive files
+/.github/CODEOWNERS @irons163
+/.github/workflows/** @irons163
+/scripts/package-app.sh @irons163
+/scripts/build-release-dmg.sh @irons163
+/scripts/generate-sparkle-appcast.sh @irons163
+/scripts/test-generate-sparkle-appcast.sh @irons163
+/scripts/validate-release-build-order.py @irons163
+/scripts/test-validate-release-build-order.sh @irons163
+/Packaging/** @irons163
+/Package.swift @irons163
+/Package.resolved @irons163
+/docs/UPDATES.md @irons163

@@ -2,7 +2,7 @@
 
 將 `codex-with-chatgpt` 的 TypeScript CLI 與唯讀 MCP 橋接服務移植為原生 Swift。ChatGPT 負責規劃與審查，Codex 執行程式修改；ChatGPT 透過經授權的 MCP 工具讀取工作區。
 
-**macOS 13 以上，Apple Silicon / Intel。無 Node.js、npm 或第三方 Swift 套件依賴。** 這個專案保留原本的 `c2c` 命令列操作模式，以 Swift 標準工具鏈建置。
+**macOS 13 以上，Apple Silicon / Intel。無 Node.js 或 npm。** 這個專案保留原本的 `c2c` 命令列操作模式，並使用 Sparkle 2 提供已簽署 App 的自動更新。
 
 ## 建置與執行
 
@@ -13,8 +13,15 @@ swift build
 swift test
 ./scripts/build.sh                # dist/c2c，本機架構的 release 執行檔
 ./scripts/build.sh --universal    # Apple Silicon + Intel universal binary
+./scripts/package-app.sh          # dist/CodexWithChatGPT.app（本機 ad-hoc 簽署）
 ./dist/c2c --help
 ```
+
+正式 release 由 GitHub Actions 建置 Apple Silicon 與 Intel DMG、Developer ID 簽署、Apple notarization，並產生 Sparkle Ed25519 appcast。設定與發佈步驟見 [安全更新與 Release](docs/UPDATES.md)。
+
+## App 使用方式
+
+將 `CodexWithChatGPT.app` 放進 `/Applications` 後開啟，選擇工作目錄並按「啟動」。App 會常駐 menu bar，執行與 `c2c entry --workspace ...` 相同的 CDP 注入；也可選擇 Stable／Beta 更新頻道及手動檢查更新。App bundle 內仍包含 `Contents/Helpers/c2c`，終端機流程不受影響。
 
 可在 Xcode 直接開啟 `Package.swift`。若要放進 PATH：
 

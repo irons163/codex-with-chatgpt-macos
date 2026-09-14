@@ -4,10 +4,31 @@ import PackageDescription
 let package = Package(
     name: "CodexWithChatGPT",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "c2c", targets: ["c2c"]), .library(name: "C2CCore", targets: ["C2CCore"])],
+    products: [
+        .executable(name: "CodexWithChatGPT", targets: ["CodexWithChatGPTApp"]),
+        .executable(name: "c2c", targets: ["c2c"]),
+        .library(name: "C2CCore", targets: ["C2CCore"])
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/sparkle-project/Sparkle",
+            exact: "2.9.1"
+        )
+    ],
     targets: [
         .target(name: "C2CCore"),
+        .executableTarget(
+            name: "CodexWithChatGPTApp",
+            dependencies: [
+                "C2CCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ]
+        ),
         .executableTarget(name: "c2c", dependencies: ["C2CCore"]),
-        .testTarget(name: "C2CCoreTests", dependencies: ["C2CCore"])
+        .testTarget(name: "C2CCoreTests", dependencies: ["C2CCore"]),
+        .testTarget(
+            name: "CodexWithChatGPTAppTests",
+            dependencies: ["CodexWithChatGPTApp"]
+        )
     ]
 )
