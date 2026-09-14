@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v11"
+    public static let version = "workspace-attachments-v12"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -90,8 +90,10 @@ public enum EntryPanel {
           quickChatStyle.id = "c2c-session-quick-chat-style";
           quickChatStyle.textContent = [
             "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button],[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-unbind-button]{appearance:none;border:0;background:transparent;color:var(--color-text-tertiary,currentColor);display:flex;align-items:center;justify-content:center;position:absolute;top:50%;transform:translateY(-50%);z-index:20;width:20px;height:20px;padding:0;border-radius:5px;cursor:pointer}",
-            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button]{inset-inline-end:6px}",
-            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-unbind-button]{inset-inline-end:30px;width:18px;height:18px}",
+            "[data-app-action-sidebar-thread-row][data-c2c-quick-chat-state=unbound]{padding-inline-end:82px}",
+            "[data-app-action-sidebar-thread-row][data-c2c-quick-chat-state=bound]{padding-inline-end:106px}",
+            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button]{inset-inline-end:58px}",
+            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-unbind-button]{inset-inline-end:82px;width:18px;height:18px}",
             "[data-c2c-quick-chat-button]:hover,[data-c2c-quick-chat-unbind-button]:hover{color:var(--color-text,currentColor);background:var(--color-background-primary-ghost-hover,rgba(127,127,127,.14))}",
             "[data-c2c-quick-chat-button]:focus-visible,[data-c2c-quick-chat-unbind-button]:focus-visible{outline:2px solid var(--color-ring,currentColor);outline-offset:0}",
             "[data-c2c-quick-chat-button] svg{width:16px;height:16px;pointer-events:none}",
@@ -311,8 +313,6 @@ public enum EntryPanel {
           function installQuickChatButton(row) {
             var threadID = row.getAttribute("data-app-action-sidebar-thread-id");
             if (!threadID) return;
-            var rail = row.querySelector(":scope > [data-hover-card-open-immediately] > div");
-            if (!rail) return;
             var button = row.querySelector(':scope > [data-c2c-quick-chat-button="true"]');
             if (!button) {
               button = document.createElement("button");
@@ -329,6 +329,7 @@ public enum EntryPanel {
             }
             var title = row.getAttribute("data-app-action-sidebar-thread-title") || "這個 session";
             var hasChat = !!quickChatBindings[threadID];
+            row.setAttribute("data-c2c-quick-chat-state", hasChat ? "bound" : "unbound");
             button.setAttribute("data-c2c-has-chat", hasChat ? "true" : "false");
             button.setAttribute("aria-label", (hasChat ? "繼續「" : "為「") + title + (hasChat ? "」的快速對話" : "」開啟快速對話"));
             button.title = button.getAttribute("aria-label");
@@ -353,12 +354,6 @@ public enum EntryPanel {
               unbindButton.setAttribute("aria-label", "解除「" + title + "」的 Quick Chat 綁定");
               unbindButton.title = unbindButton.getAttribute("aria-label");
             }
-            if (!rail.hasAttribute("data-c2c-quick-chat-rail")) {
-              rail.setAttribute("data-c2c-quick-chat-rail", "true");
-              rail.setAttribute("data-c2c-original-inline-end", rail.style.insetInlineEnd || "");
-            }
-            // Keep Codex's native hover actions clear of our one or two buttons.
-            rail.style.insetInlineEnd = hasChat ? "48px" : "24px";
           }
           function scanQuickChatRows() {
             document.querySelectorAll("[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-id]").forEach(installQuickChatButton);
@@ -389,11 +384,7 @@ public enum EntryPanel {
             quickChatScanScheduled = false;
             document.querySelectorAll('[data-c2c-quick-chat-button="true"]').forEach(function (button) { button.remove(); });
             document.querySelectorAll('[data-c2c-quick-chat-unbind-button="true"]').forEach(function (button) { button.remove(); });
-            document.querySelectorAll('[data-c2c-quick-chat-rail="true"]').forEach(function (rail) {
-              rail.style.insetInlineEnd = rail.getAttribute("data-c2c-original-inline-end") || "";
-              rail.removeAttribute("data-c2c-quick-chat-rail");
-              rail.removeAttribute("data-c2c-original-inline-end");
-            });
+            document.querySelectorAll('[data-c2c-quick-chat-state]').forEach(function (row) { row.removeAttribute("data-c2c-quick-chat-state"); });
             quickChatStyle.remove();
             try { delete window[QUICK_CHAT_CLEANUP]; } catch (error) { window[QUICK_CHAT_CLEANUP] = undefined; }
           };
