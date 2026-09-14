@@ -2,10 +2,12 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v4"
+    public static let version = "workspace-attachments-v11"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
+    public static let quickChatCleanupFunction = "__c2cQuickChatCleanup"
+    public static let quickChatStorageKey = "c2c.quick-chat-by-thread.v1"
 
     public static var presenceScript: String {
         "window[\"\(marker)\"] === \"\(version)\" && document.getElementById(\"\(hostID)\") !== null"
@@ -25,8 +27,13 @@ public enum EntryPanel {
           var VERSION = "\(version)";
           var BINDING = "\(bindingName)";
           var RESULT = "\(resultFunction)";
+          var QUICK_CHAT_CLEANUP = "\(quickChatCleanupFunction)";
+          var QUICK_CHAT_STORAGE = "\(quickChatStorageKey)";
           var previousHost = document.getElementById("\(hostID)");
           if (window[MARKER] === VERSION && previousHost) return "already";
+          if (typeof window[QUICK_CHAT_CLEANUP] === "function") {
+            try { window[QUICK_CHAT_CLEANUP](); } catch (error) {}
+          }
           if (previousHost) previousHost.remove();
           window[MARKER] = VERSION;
           var WORKSPACE = \(workspace);
@@ -79,6 +86,318 @@ public enum EntryPanel {
           shadow.appendChild(panel);
           shadow.appendChild(toast);
           document.documentElement.appendChild(host);
+          var quickChatStyle = document.createElement("style");
+          quickChatStyle.id = "c2c-session-quick-chat-style";
+          quickChatStyle.textContent = [
+            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button],[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-unbind-button]{appearance:none;border:0;background:transparent;color:var(--color-text-tertiary,currentColor);display:flex;align-items:center;justify-content:center;position:absolute;top:50%;transform:translateY(-50%);z-index:20;width:20px;height:20px;padding:0;border-radius:5px;cursor:pointer}",
+            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button]{inset-inline-end:6px}",
+            "[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-unbind-button]{inset-inline-end:30px;width:18px;height:18px}",
+            "[data-c2c-quick-chat-button]:hover,[data-c2c-quick-chat-unbind-button]:hover{color:var(--color-text,currentColor);background:var(--color-background-primary-ghost-hover,rgba(127,127,127,.14))}",
+            "[data-c2c-quick-chat-button]:focus-visible,[data-c2c-quick-chat-unbind-button]:focus-visible{outline:2px solid var(--color-ring,currentColor);outline-offset:0}",
+            "[data-c2c-quick-chat-button] svg{width:16px;height:16px;pointer-events:none}",
+            "[data-c2c-quick-chat-unbind-button] svg{width:12px;height:12px;pointer-events:none}",
+            "[data-c2c-quick-chat-button][data-c2c-has-chat=true]{color:var(--color-text,currentColor)}"
+          ].join("");
+          document.head.appendChild(quickChatStyle);
+          var quickChatBindings = {};
+          try {
+            var storedQuickChats = JSON.parse(localStorage.getItem(QUICK_CHAT_STORAGE) || "{}");
+            if (storedQuickChats && typeof storedQuickChats === "object" && !Array.isArray(storedQuickChats)) {
+              Object.keys(storedQuickChats).forEach(function (threadID) {
+                var conversationID = String(storedQuickChats[threadID] || "").replace(/^chatgpt:/, "");
+                if (conversationID && conversationID.indexOf("local-chatgpt:") !== 0) {
+                  quickChatBindings[threadID] = conversationID;
+                }
+              });
+            }
+          } catch (error) {}
+          var activeQuickChatThreadID = null;
+          var openingQuickChat = false;
+          var quickChatWasOpen = false;
+          var quickChatDisposed = false;
+          var quickChatScanScheduled = false;
+          var quickChatScanFrame = 0;
+          function saveQuickChatBindings() {
+            try { localStorage.setItem(QUICK_CHAT_STORAGE, JSON.stringify(quickChatBindings)); } catch (error) {}
+          }
+          function normalizeQuickChatID(value) {
+            return String(value || "").replace(/^chatgpt:/, "");
+          }
+          function unbindQuickChat(threadID) {
+            if (!threadID || !quickChatBindings[threadID]) return;
+            delete quickChatBindings[threadID];
+            if (activeQuickChatThreadID === threadID) activeQuickChatThreadID = null;
+            saveQuickChatBindings();
+            scheduleQuickChatScan();
+            showToast("已解除 Quick Chat 綁定");
+          }
+          function quickChatPanel() {
+            return document.querySelector('section[data-pip-obstacle="quick-chat"][data-state="open"]');
+          }
+          function currentQuickChatID(panel) {
+            var context = panel && panel.querySelector("[data-above-composer-conversation-id]");
+            return normalizeQuickChatID(context && context.getAttribute("data-above-composer-conversation-id"));
+          }
+          function nativeQuickChatButton() {
+            return Array.from(document.querySelectorAll("button")).find(function (button) {
+              if (button.hasAttribute("data-c2c-quick-chat-button")) return false;
+              var label = (button.getAttribute("aria-label") || "").toLowerCase();
+              return label === "快速對話" || label === "快速聊天" || label === "quick chat";
+            }) || null;
+          }
+          function waitForQuickChat(test, timeout) {
+            return new Promise(function (resolve) {
+              var started = Date.now();
+              function check() {
+                var result = null;
+                try { result = test(); } catch (error) {}
+                if (result || Date.now() - started >= timeout) resolve(result);
+                else setTimeout(check, 40);
+              }
+              check();
+            });
+          }
+          function reactFiber(element) {
+            if (!element) return null;
+            var key = Object.keys(element).find(function (name) { return name.indexOf("__reactFiber$") === 0; });
+            return key ? element[key] : null;
+          }
+          function renderedConversationButton(panel, conversationID) {
+            return Array.from(panel.querySelectorAll("li button")).find(function (button) {
+              var fiber = reactFiber(button);
+              for (var depth = 0; fiber && depth < 5; depth++, fiber = fiber.return) {
+                if (String(fiber.key || "") === conversationID) return true;
+              }
+              return false;
+            }) || null;
+          }
+          function selectQuickChatConversation(panel, conversationID, fallbackTitle) {
+            var rendered = renderedConversationButton(panel, conversationID);
+            if (rendered) { rendered.click(); return true; }
+            var recent = panel.querySelector('section[aria-labelledby="quick-chat-recent-heading"]');
+            var fiber = reactFiber(recent || panel.querySelector("[data-thread-find-composer]"));
+            var selectionProps = null;
+            for (var depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+              var props = fiber.memoizedProps;
+              if (!props || !Array.isArray(props.conversations) || typeof props.onConversationSelect !== "function") continue;
+              selectionProps = props;
+              var conversation = props.conversations.find(function (item) {
+                return normalizeQuickChatID(item && item.conversationId) === conversationID;
+              });
+              if (!conversation) continue;
+              props.onConversationSelect(conversation.conversationId, conversation.title || fallbackTitle);
+              return true;
+            }
+            if (!selectionProps) return false;
+            // Quick Chat's native handler accepts (conversationID, title). It can
+            // restore a conversation that is not part of the three rendered recents.
+            selectionProps.onConversationSelect(conversationID, fallbackTitle);
+            return true;
+          }
+          function setQuickChatBinding(threadID, conversationID) {
+            conversationID = normalizeQuickChatID(conversationID);
+            if (!threadID || !conversationID) return;
+            if (conversationID.indexOf("local-chatgpt:") === 0) return;
+            var changed = normalizeQuickChatID(quickChatBindings[threadID]) !== conversationID;
+            Object.keys(quickChatBindings).forEach(function (otherThreadID) {
+              if (otherThreadID !== threadID && normalizeQuickChatID(quickChatBindings[otherThreadID]) === conversationID) {
+                delete quickChatBindings[otherThreadID];
+                changed = true;
+              }
+            });
+            if (!changed) return;
+            quickChatBindings[threadID] = conversationID;
+            saveQuickChatBindings();
+            scheduleQuickChatScan();
+          }
+          function captureActiveQuickChat() {
+            var panel = quickChatPanel();
+            if (panel) {
+              quickChatWasOpen = true;
+              if (activeQuickChatThreadID) {
+                var conversationID = currentQuickChatID(panel);
+                if (conversationID) setQuickChatBinding(activeQuickChatThreadID, conversationID);
+              }
+            } else if (quickChatWasOpen && !openingQuickChat) {
+              quickChatWasOpen = false;
+              activeQuickChatThreadID = null;
+            }
+          }
+          function newQuickChatButton(panel) {
+            return Array.from(panel.querySelectorAll("button")).find(function (button) {
+              var label = (button.getAttribute("aria-label") || "").toLowerCase();
+              return label === "新對話" || label === "new chat";
+            }) || null;
+          }
+          async function openQuickChatForThread(row) {
+            if (openingQuickChat) return;
+            openingQuickChat = true;
+            var threadID = row.getAttribute("data-app-action-sidebar-thread-id") || "";
+            var previousActiveThreadID = activeQuickChatThreadID;
+            try {
+              if (row.getAttribute("data-app-action-sidebar-thread-selected") !== "true") {
+                row.click();
+                await waitForQuickChat(function () {
+                  return row.getAttribute("data-app-action-sidebar-thread-selected") === "true";
+                }, 2000);
+              }
+              activeQuickChatThreadID = threadID;
+              var panel = quickChatPanel();
+              if (!panel) {
+                var nativeButton = nativeQuickChatButton();
+                if (!nativeButton) throw new Error("找不到內建 Quick Chat 入口");
+                nativeButton.click();
+                panel = await waitForQuickChat(quickChatPanel, 2500);
+              }
+              if (!panel) throw new Error("Quick Chat 未開啟");
+
+              var mappedID = normalizeQuickChatID(quickChatBindings[threadID]);
+              var currentID = currentQuickChatID(panel);
+              if (mappedID && currentID !== mappedID) {
+                var createButton = newQuickChatButton(panel);
+                if (createButton) {
+                  createButton.click();
+                  await waitForQuickChat(function () {
+                    var nextPanel = quickChatPanel();
+                    return nextPanel && currentQuickChatID(nextPanel) !== currentID ? nextPanel : null;
+                  }, 2000);
+                  panel = quickChatPanel() || panel;
+                }
+                var threadTitle = row.getAttribute("data-app-action-sidebar-thread-title") || "Quick Chat";
+                if (!selectQuickChatConversation(panel, mappedID, threadTitle)) {
+                  throw new Error("找不到 Quick Chat 的對話切換功能");
+                }
+                var resumed = await waitForQuickChat(function () {
+                  return currentQuickChatID(quickChatPanel()) === mappedID;
+                }, 4000);
+                if (!resumed) {
+                  throw new Error("無法繼續這個 session 原本的 Quick Chat 對話");
+                }
+              }
+
+              if (!mappedID) {
+                panel = quickChatPanel() || panel;
+                currentID = currentQuickChatID(panel);
+                if (currentID.indexOf("local-chatgpt:") !== 0 ||
+                    (previousActiveThreadID && previousActiveThreadID !== threadID)) {
+                  var newButton = newQuickChatButton(panel);
+                  if (!newButton) throw new Error("找不到 Quick Chat 的新對話按鈕");
+                  newButton.click();
+                  await waitForQuickChat(function () {
+                    var nextID = currentQuickChatID(quickChatPanel());
+                    return nextID && nextID !== currentID ? nextID : null;
+                  }, 2500);
+                }
+              }
+              panel = quickChatPanel() || panel;
+              setQuickChatBinding(threadID, currentQuickChatID(panel));
+              var editor = panel.querySelector('[contenteditable="true"][role="textbox"], textarea[role="textbox"]');
+              if (editor) editor.focus();
+            } catch (error) {
+              console.warn("c2c Quick Chat:", error);
+              showToast(error && error.message ? error.message : "Quick Chat 開啟失敗");
+            } finally {
+              openingQuickChat = false;
+              captureActiveQuickChat();
+              scheduleQuickChatScan();
+            }
+          }
+          function quickChatIcon() {
+            return '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16"><path d="M7.983 5.304a.526.526 0 01.526.526v1.649h1.649a.525.525 0 110 1.051H8.509v1.65a.526.526 0 01-1.051 0V8.53h-1.65a.525.525 0 110-1.051h1.65V5.83a.526.526 0 01.525-.526z" fill="currentColor"/><path fill-rule="evenodd" d="M8 1.808c3.575 0 6.525 2.745 6.525 6.192 0 3.448-2.95 6.192-6.525 6.192-1.215 0-2.241-.363-3.245-.832l-1.768.459a.66.66 0 01-.807-.78l.37-1.675C2.036 10.36 1.475 9.382 1.475 8 1.475 4.553 4.425 1.808 8 1.808zm0 1.051C4.948 2.859 2.525 5.189 2.525 8c0 1.134.455 1.883 1.027 3.015a.65.65 0 01.054.44l-.263 1.186 1.283-.332a.65.65 0 01.45.043l.366.17c.85.378 1.65.62 2.558.62 3.052 0 5.474-2.33 5.475-5.142 0-2.811-2.423-5.141-5.475-5.141z" fill="currentColor"/></svg>';
+          }
+          function unbindQuickChatIcon() {
+            return '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16"><path d="M4.25 4.25l7.5 7.5m0-7.5l-7.5 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+          }
+          function installQuickChatButton(row) {
+            var threadID = row.getAttribute("data-app-action-sidebar-thread-id");
+            if (!threadID) return;
+            var rail = row.querySelector(":scope > [data-hover-card-open-immediately] > div");
+            if (!rail) return;
+            var button = row.querySelector(':scope > [data-c2c-quick-chat-button="true"]');
+            if (!button) {
+              button = document.createElement("button");
+              button.type = "button";
+              button.setAttribute("data-c2c-quick-chat-button", "true");
+              button.innerHTML = quickChatIcon();
+              button.addEventListener("click", function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+                openQuickChatForThread(row);
+              });
+              row.appendChild(button);
+            }
+            var title = row.getAttribute("data-app-action-sidebar-thread-title") || "這個 session";
+            var hasChat = !!quickChatBindings[threadID];
+            button.setAttribute("data-c2c-has-chat", hasChat ? "true" : "false");
+            button.setAttribute("aria-label", (hasChat ? "繼續「" : "為「") + title + (hasChat ? "」的快速對話" : "」開啟快速對話"));
+            button.title = button.getAttribute("aria-label");
+            var unbindButton = row.querySelector(':scope > [data-c2c-quick-chat-unbind-button="true"]');
+            if (hasChat && !unbindButton) {
+              unbindButton = document.createElement("button");
+              unbindButton.type = "button";
+              unbindButton.setAttribute("data-c2c-quick-chat-unbind-button", "true");
+              unbindButton.innerHTML = unbindQuickChatIcon();
+              unbindButton.addEventListener("click", function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+                unbindQuickChat(threadID);
+              });
+              row.appendChild(unbindButton);
+            } else if (!hasChat && unbindButton) {
+              unbindButton.remove();
+              unbindButton = null;
+            }
+            if (unbindButton) {
+              unbindButton.setAttribute("aria-label", "解除「" + title + "」的 Quick Chat 綁定");
+              unbindButton.title = unbindButton.getAttribute("aria-label");
+            }
+            if (!rail.hasAttribute("data-c2c-quick-chat-rail")) {
+              rail.setAttribute("data-c2c-quick-chat-rail", "true");
+              rail.setAttribute("data-c2c-original-inline-end", rail.style.insetInlineEnd || "");
+            }
+            // Keep Codex's native hover actions clear of our one or two buttons.
+            rail.style.insetInlineEnd = hasChat ? "48px" : "24px";
+          }
+          function scanQuickChatRows() {
+            document.querySelectorAll("[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-id]").forEach(installQuickChatButton);
+            captureActiveQuickChat();
+          }
+          function scheduleQuickChatScan() {
+            if (quickChatDisposed || quickChatScanScheduled) return;
+            quickChatScanScheduled = true;
+            quickChatScanFrame = requestAnimationFrame(function () {
+              quickChatScanFrame = 0;
+              quickChatScanScheduled = false;
+              if (quickChatDisposed) return;
+              scanQuickChatRows();
+            });
+          }
+          var quickChatObserver = new MutationObserver(scheduleQuickChatScan);
+          quickChatObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["data-above-composer-conversation-id", "data-app-action-sidebar-thread-selected"]
+          });
+          window[QUICK_CHAT_CLEANUP] = function () {
+            quickChatDisposed = true;
+            quickChatObserver.disconnect();
+            if (quickChatScanFrame) cancelAnimationFrame(quickChatScanFrame);
+            quickChatScanFrame = 0;
+            quickChatScanScheduled = false;
+            document.querySelectorAll('[data-c2c-quick-chat-button="true"]').forEach(function (button) { button.remove(); });
+            document.querySelectorAll('[data-c2c-quick-chat-unbind-button="true"]').forEach(function (button) { button.remove(); });
+            document.querySelectorAll('[data-c2c-quick-chat-rail="true"]').forEach(function (rail) {
+              rail.style.insetInlineEnd = rail.getAttribute("data-c2c-original-inline-end") || "";
+              rail.removeAttribute("data-c2c-quick-chat-rail");
+              rail.removeAttribute("data-c2c-original-inline-end");
+            });
+            quickChatStyle.remove();
+            try { delete window[QUICK_CHAT_CLEANUP]; } catch (error) { window[QUICK_CHAT_CLEANUP] = undefined; }
+          };
+          scanQuickChatRows();
           var toastTimer = 0;
           function showToast(message) {
             toast.textContent = message;
@@ -185,6 +504,8 @@ public enum EntryPanel {
 
     public static let clearScript = """
         (function () {
+          var cleanup = window["\(quickChatCleanupFunction)"];
+          if (typeof cleanup === "function") { try { cleanup(); } catch (error) {} }
           var host = document.getElementById("\(hostID)");
           if (host && host.parentNode) host.parentNode.removeChild(host);
           try { delete window.\(marker); } catch (error) { window.\(marker) = undefined; }

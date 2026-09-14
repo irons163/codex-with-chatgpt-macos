@@ -89,8 +89,9 @@ c2c entry --workspace /path/to/project        # 前景執行，Ctrl-C 結束
 c2c entry --app /Applications/ChatGPT.app --debug-port 57330
 ```
 
-`entry` 會以 Chrome DevTools Protocol 連上 Codex/ChatGPT 桌面版（與 theme-switcher 同款的 attach 方式：先沿用現有 debug 埠，否則以 `--remote-debugging-port` 重新啟動 app），在視窗右下注入一個可拖曳的浮動按鈕，提供兩個動作：
+`entry` 會以 Chrome DevTools Protocol 連上 Codex/ChatGPT 桌面版（與 theme-switcher 同款的 attach 方式：先沿用現有 debug 埠，否則以 `--remote-debugging-port` 重新啟動 app），在每個 session 加入 Quick Chat 入口，並在視窗右下注入一個可拖曳的工作目錄按鈕：
 
+- **Session Quick Chat**：每個 Codex session 右側會多一個 Quick Chat 圖示。第一次按會建立該 session 的 ChatGPT 對話；送出訊息後會記住 conversation ID，之後從同一個 session 按下即可繼續。已綁定的 session 會在 Quick Chat 圖示左邊直接顯示「×」解除按鈕；解除後下次按 Quick Chat 圖示會建立新對話。對應關係只儲存在桌面 App 的 localStorage。
 - **選擇工作目錄**：使用 macOS 原生目錄選擇視窗切換目前工作區。
 - **附加目前專案檔案**：先開啟 ChatGPT／Quick Chat，再掃描完整工作目錄，套用 ignore、文字檔驗證與敏感檔案排除規則後，以 CDP 設定 ChatGPT 的附件輸入。第一次會建立固定批次快照；依 ChatGPT 限制每批最多 20 個檔案，送出目前訊息後再按一次即可繼續。輸入框仍有附件時不會載入下一批。單檔上限 1 MiB、每批合計 8 MiB。
 

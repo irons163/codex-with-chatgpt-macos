@@ -46,6 +46,25 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(source.contains("callNative(\"attach-workspace-files\")"))
         XCTAssertTrue(source.contains("callNative(\"get-state\", true)"))
         XCTAssertTrue(source.contains("payload.action === \"state\""))
+        XCTAssertTrue(source.contains("data-app-action-sidebar-thread-id"))
+        XCTAssertTrue(source.contains("data-c2c-quick-chat-button"))
+        XCTAssertTrue(source.contains("[data-app-action-sidebar-thread-row]>[data-c2c-quick-chat-button]{inset-inline-end:6px}"))
+        XCTAssertTrue(source.contains("row.appendChild(button)"))
+        XCTAssertTrue(source.contains("解除 Quick Chat 綁定"))
+        XCTAssertTrue(source.contains("data-c2c-quick-chat-unbind-button"))
+        XCTAssertTrue(source.contains("row.appendChild(unbindButton)"))
+        XCTAssertTrue(source.contains("unbindQuickChat(threadID)"))
+        XCTAssertTrue(source.contains("delete quickChatBindings[threadID]"))
+        XCTAssertFalse(source.contains("button.addEventListener(\"contextmenu\""))
+        XCTAssertTrue(source.contains(EntryPanel.quickChatStorageKey))
+        XCTAssertTrue(source.contains("data-above-composer-conversation-id"))
+        XCTAssertTrue(source.contains("onConversationSelect"))
+        XCTAssertTrue(source.contains("conversation.title || fallbackTitle"))
+        XCTAssertTrue(source.contains("無法繼續這個 session 原本的 Quick Chat 對話"))
+        XCTAssertTrue(source.contains("if (!changed) return"))
+        XCTAssertTrue(source.contains("cancelAnimationFrame(quickChatScanFrame)"))
+        XCTAssertFalse(source.contains("conversation.projectId"))
+        XCTAssertTrue(source.contains("openQuickChatForThread(row)"))
         XCTAssertTrue(source.contains("送出後附加下一批"))
         XCTAssertTrue(source.contains("從第一批重新開始"))
         XCTAssertFalse(source.contains("callNative(\"open-workspace\")"))
@@ -55,6 +74,7 @@ final class EntryTests: XCTestCase {
         let cleared = EntryPanel.clearScript
         XCTAssertTrue(cleared.contains("getElementById(\"\(EntryPanel.hostID)\")"))
         XCTAssertTrue(cleared.contains("delete window.\(EntryPanel.marker)"))
+        XCTAssertTrue(cleared.contains(EntryPanel.quickChatCleanupFunction))
     }
 
     func testWorkspaceAttachmentBatchUsesRawSafeFilesAndLimitsSize() throws {
