@@ -43,6 +43,7 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(source.contains(EntryPanel.bindingName))
         XCTAssertTrue(source.contains(EntryPanel.resultFunction))
         XCTAssertTrue(source.contains("callNative(\"choose-workspace\")"))
+        XCTAssertTrue(source.contains("callNative(\"edit-ignore-rules\")"))
         XCTAssertTrue(source.contains("callNative(\"attach-workspace-files\")"))
         XCTAssertTrue(source.contains("callNative(\"get-state\", true)"))
         XCTAssertTrue(source.contains("payload.action === \"state\""))
@@ -72,6 +73,7 @@ final class EntryTests: XCTestCase {
         XCTAssertFalse(source.contains("callNative(\"open-workspace\")"))
         XCTAssertFalse(source.contains("workspace-context.md"))
         XCTAssertTrue(source.contains("工作區：\" + WORKSPACE"))
+        XCTAssertTrue(source.contains("已開啟 .c2cignore"))
         XCTAssertTrue(source.contains("\"my project\""))
         let cleared = EntryPanel.clearScript
         XCTAssertTrue(cleared.contains("getElementById(\"\(EntryPanel.hostID)\")"))
@@ -95,6 +97,30 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(batch.hasMore)
         XCTAssertTrue(batch.truncated)
         XCTAssertFalse(batch.files.map(\.lastPathComponent).contains(".env"))
+    }
+
+    func testEditableIgnorePolicyContainsDefaultsMigratesLegacyRulesAndCanBeChanged() throws {
+        let policyURL = project.appendingPathComponent(".c2cignore")
+        try "private-notes/\n".write(to: policyURL, atomically: true, encoding: .utf8)
+        let workspace = try Workspace(root: project.path)
+
+        let openedURL = try workspace.prepareEditableIgnorePolicy()
+        XCTAssertEqual(openedURL, policyURL)
+        let migrated = try String(contentsOf: policyURL, encoding: .utf8)
+        XCTAssertTrue(migrated.contains(WorkspaceIgnoreRules.policyMarker))
+        XCTAssertTrue(migrated.contains(".env.*"))
+        XCTAssertTrue(migrated.contains("node_modules/"))
+        XCTAssertTrue(migrated.contains("private-notes/"))
+
+        let secretURL = project.appendingPathComponent("secrets.json")
+        try "{\"token\":\"hidden\"}\n".write(to: secretURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try Workspace(root: project.path).resolve("secrets.json"))
+
+        try "\(WorkspaceIgnoreRules.policyMarker)\n# All project files are allowed by this policy.\n"
+            .write(to: policyURL, atomically: true, encoding: .utf8)
+        let editableService = EntryService(workspace: try Workspace(root: project.path))
+        let batch = try editableService.workspaceAttachmentBatch()
+        XCTAssertTrue(batch.files.contains(secretURL))
     }
 
     func testWorkspaceAttachmentBatchNeverExceedsChatGPTLimit() throws {

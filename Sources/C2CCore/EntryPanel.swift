@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v12"
+    public static let version = "workspace-attachments-v13"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -71,6 +71,8 @@ public enum EntryPanel {
           hint.textContent = "工作區：" + WORKSPACE;
           var chooseButton = document.createElement("button");
           chooseButton.textContent = "選擇工作目錄…";
+          var ignoreButton = document.createElement("button");
+          ignoreButton.textContent = "編輯排除規則…";
           var attachButton = document.createElement("button");
           attachButton.textContent = "附加目前專案檔案";
           var status = document.createElement("div");
@@ -80,6 +82,7 @@ public enum EntryPanel {
           panel.appendChild(heading);
           panel.appendChild(hint);
           panel.appendChild(chooseButton);
+          panel.appendChild(ignoreButton);
           panel.appendChild(attachButton);
           panel.appendChild(status);
           shadow.appendChild(bubble);
@@ -399,6 +402,7 @@ public enum EntryPanel {
           function setStatus(message) { status.textContent = message; }
           function setBusy(busy) {
             chooseButton.disabled = busy;
+            ignoreButton.disabled = busy;
             attachButton.disabled = busy;
           }
           function updateQueueState(payload) {
@@ -421,6 +425,7 @@ public enum EntryPanel {
             catch (error) { setBusy(false); setStatus(""); showToast("無法呼叫 c2c：" + error); }
           }
           chooseButton.addEventListener("click", function () { callNative("choose-workspace"); });
+          ignoreButton.addEventListener("click", function () { callNative("edit-ignore-rules"); });
           attachButton.addEventListener("click", function () { callNative("attach-workspace-files"); });
           window[RESULT] = function (payloadText) {
             var payload = null;
@@ -436,6 +441,10 @@ public enum EntryPanel {
                 attachButton.textContent = "附加目前專案檔案";
                 setStatus("已選擇工作目錄");
                 showToast("工作目錄已切換為「" + WORKSPACE + "」。");
+              } else if (payload.action === "edit-ignore-rules") {
+                attachButton.textContent = "附加目前專案檔案";
+                setStatus("已開啟 .c2cignore");
+                showToast("排除規則已用文字編輯器開啟；儲存後，下次附加會自動重新載入。");
               } else if (payload.action === "attach-workspace-files") {
                 var count = payload.count || 0;
                 var batchNumber = payload.batchNumber || 1;

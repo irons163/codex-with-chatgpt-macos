@@ -167,6 +167,8 @@ public final class EntryService {
             Task { [weak self] in await self?.respond(session, self?.entryStatePayload() ?? ["ok": false]) }
         case "choose-workspace":
             Task { [weak self] in await self?.performChooseWorkspace(session: session) }
+        case "edit-ignore-rules":
+            Task { [weak self] in await self?.performEditIgnoreRules(session: session) }
         case "attach-workspace-files":
             Task { [weak self] in await self?.performAttachWorkspaceFiles(session: session) }
         default:
@@ -212,6 +214,41 @@ public final class EntryService {
         }
     }
 
+    private func performEditIgnoreRules(session: CDPSession) async {
+        let wasBusy = withLock {
+            let busy = pickerBusy || attachmentBusy
+            if !busy { pickerBusy = true }
+            return busy
+        }
+        guard !wasBusy else {
+            await respond(session, ["ok": false, "error": "附件或目錄操作仍在處理中，請稍候。"])
+            return
+        }
+        defer { withLock { pickerBusy = false } }
+        do {
+            let selected = withLock { workspace }
+            let policyURL = try selected.prepareEditableIgnorePolicy()
+            let refreshed = try Workspace(root: selected.root)
+            withLock {
+                if workspace.root == selected.root {
+                    workspace = refreshed
+                    attachmentQueue = nil
+                }
+            }
+            let result = try runCommand("/usr/bin/open", ["-t", policyURL.path], timeout: 20)
+            guard result.code == 0 else { throw C2CError("無法開啟 .c2cignore。") }
+            await respond(session, [
+                "ok": true,
+                "action": "edit-ignore-rules",
+                "workspace": refreshed.name,
+                "path": policyURL.path
+            ])
+            await broadcastState()
+        } catch {
+            await respond(session, ["ok": false, "error": error.localizedDescription])
+        }
+    }
+
     struct AttachmentBatch {
         let files: [URL]
         let candidateCount: Int
@@ -251,11 +288,24 @@ public final class EntryService {
     }
 
     func workspaceAttachmentQueue(maxFiles: Int = EntryService.chatGPTMaximumAttachmentFiles, maxFileBytes: Int = 1 * 1024 * 1024, maxTotalBytes: Int = 8 * 1024 * 1024) throws -> AttachmentQueueSnapshot {
+        let current = withLock { workspace }
+        let selected = try Workspace(root: current.root)
+        withLock {
+            if workspace.root == current.root { workspace = selected }
+        }
+        return try workspaceAttachmentQueue(
+            workspace: selected,
+            maxFiles: maxFiles,
+            maxFileBytes: maxFileBytes,
+            maxTotalBytes: maxTotalBytes
+        )
+    }
+
+    private func workspaceAttachmentQueue(workspace selected: Workspace, maxFiles: Int, maxFileBytes: Int, maxTotalBytes: Int) throws -> AttachmentQueueSnapshot {
         guard maxFiles > 0, maxFileBytes > 0, maxTotalBytes > 0 else {
             throw C2CError("附件數量與容量上限必須大於零。")
         }
         let effectiveMaxFiles = min(maxFiles, Self.chatGPTMaximumAttachmentFiles)
-        let selected = withLock { workspace }
         let preferredNames = [
             "AGENTS.md", "README.md", "README", "Package.swift", "package.json",
             "Cargo.toml", "pyproject.toml", "Gemfile", "Podfile", "Makefile"
@@ -327,8 +377,16 @@ public final class EntryService {
         }
         defer { withLock { attachmentBusy = false } }
         do {
-            let selected = request.workspace
-            var queue = try request.queue ?? workspaceAttachmentQueue()
+            let selected = try Workspace(root: request.workspace.root)
+            withLock {
+                if workspace.root == request.workspace.root { workspace = selected }
+            }
+            var queue = try request.queue ?? workspaceAttachmentQueue(
+                workspace: selected,
+                maxFiles: Self.chatGPTMaximumAttachmentFiles,
+                maxFileBytes: 1 * 1024 * 1024,
+                maxTotalBytes: 8 * 1024 * 1024
+            )
             guard queue.workspaceID == selected.id, queue.workspaceRoot == selected.root else {
                 throw C2CError("工作目錄已變更，附件批次已重置，請再按一次。")
             }

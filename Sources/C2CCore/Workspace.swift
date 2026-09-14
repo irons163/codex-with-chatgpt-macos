@@ -41,49 +41,158 @@ private struct IgnoreRule {
 }
 
 final class WorkspaceIgnoreRules {
-    private static let sensitivePatterns = [
-        ".env", ".env.*", "!.env.example", "*.pem", "*.key", "*.p12", "*.pfx",
-        "*.jks", "*.keystore", "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
-        "id_ecdsa", "id_ecdsa.*", "id_dsa", "id_dsa.*", ".ssh/", ".aws/", ".gnupg/",
-        ".npmrc", ".netrc", "_netrc", ".git-credentials", "*.keychain", "*.keychain-db",
-        ".cloudflared/", ".git/", "credentials.json", "service-account*.json", "secrets.json",
-        "cookies.sqlite", "Cookies", ".c2c-secrets*"
-    ]
-    private static let noisePatterns = [
-        ".git/", "node_modules/", "dist/", "build/", "out/", ".next/", ".nuxt/",
-        ".svelte-kit/", "coverage/", ".cache/", ".turbo/", ".venv/", "venv/",
-        "__pycache__/", ".pytest_cache/", ".mypy_cache/", "target/", ".gradle/", ".idea/",
-        ".tooling/", ".pnpm-store/", ".build/", ".swiftpm/", ".DS_Store", "*.lock", "pnpm-lock.yaml",
-        "package-lock.json", "yarn.lock"
-    ]
+    static let policyMarker = "# c2c-ignore-policy-v1"
+    static let defaultPolicy = """
+    # c2c-ignore-policy-v1
+    # Attachment and workspace exclusion policy.
+    # Edit this file like .gitignore. Removing a rule may expose sensitive data to ChatGPT.
 
-    private let sensitive: [IgnoreRule]
-    private let noise: [IgnoreRule]
-    private let c2c: [IgnoreRule]
+    # Environment files (keep the public example)
+    .env
+    .env.*
+    !.env.example
+
+    # Private keys, certificates, credentials and local account data
+    *.pem
+    *.key
+    *.p12
+    *.pfx
+    *.jks
+    *.keystore
+    id_rsa
+    id_rsa.*
+    id_ed25519
+    id_ed25519.*
+    id_ecdsa
+    id_ecdsa.*
+    id_dsa
+    id_dsa.*
+    .ssh/
+    .aws/
+    .gnupg/
+    .npmrc
+    .netrc
+    _netrc
+    .git-credentials
+    *.keychain
+    *.keychain-db
+    .cloudflared/
+    credentials.json
+    service-account*.json
+    secrets.json
+    cookies.sqlite
+    Cookies
+    .c2c-secrets*
+
+    # Generated files, dependencies and build caches
+    .git/
+    node_modules/
+    dist/
+    build/
+    out/
+    .next/
+    .nuxt/
+    .svelte-kit/
+    coverage/
+    .cache/
+    .turbo/
+    .venv/
+    venv/
+    __pycache__/
+    .pytest_cache/
+    .mypy_cache/
+    target/
+    .gradle/
+    .idea/
+    .tooling/
+    .pnpm-store/
+    .build/
+    .swiftpm/
+    .DS_Store
+    *.lock
+    pnpm-lock.yaml
+    package-lock.json
+    yarn.lock
+    """
+
+    private let policy: [IgnoreRule]
     private let git: [IgnoreRule]
 
     init(root: String) {
-        sensitive = Self.rules(Self.sensitivePatterns)
-        noise = Self.rules(Self.noisePatterns)
-        c2c = Self.load(root: root, name: ".c2cignore")
+        let customText = Self.loadText(root: root, name: ".c2cignore")
+        let policyText: String
+        if let customText, customText.contains(Self.policyMarker) {
+            policyText = customText
+        } else {
+            policyText = Self.defaultPolicy + (customText.map { "\n\n# Existing project-specific rules\n" + $0 } ?? "")
+        }
+        policy = Self.rules(policyText.components(separatedBy: .newlines))
         git = Self.load(root: root, name: ".gitignore")
     }
 
     func isSensitive(_ path: String) -> Bool {
-        !path.isEmpty && path != "." && (Self.matches(path, rules: sensitive) || Self.matches(path, rules: c2c))
+        !path.isEmpty && path != "." && Self.matches(path, rules: policy)
     }
 
     func isHidden(_ path: String) -> Bool {
-        isSensitive(path) || Self.matches(path, rules: noise) || Self.matches(path, rules: git)
+        isSensitive(path) || Self.matches(path, rules: git)
     }
 
     private static func load(root: String, name: String) -> [IgnoreRule] {
+        rules(loadText(root: root, name: name)?.components(separatedBy: .newlines) ?? [])
+    }
+
+    private static func loadText(root: String, name: String) -> String? {
         let url = URL(fileURLWithPath: root).appendingPathComponent(name)
         let canonical = url.resolvingSymlinksInPath().path
         guard (canonical == root || canonical.hasPrefix(root + "/")), canonical == url.path,
               let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]), values.isRegularFile == true, values.isSymbolicLink != true,
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return rules(text.components(separatedBy: .newlines))
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return text
+    }
+
+    static func prepareEditablePolicy(root: String) throws -> URL {
+        let url = URL(fileURLWithPath: root).appendingPathComponent(".c2cignore")
+        var existing = ""
+        if FileManager.default.fileExists(atPath: url.path) {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true,
+                  url.resolvingSymlinksInPath().path == url.path else {
+                throw C2CError(".c2cignore 必須是工作目錄中的一般檔案，不能是 symlink。")
+            }
+            existing = try String(contentsOf: url, encoding: .utf8)
+            if existing.contains(policyMarker) { return url }
+        }
+        var policyText = defaultPolicy
+        if !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            policyText += "\n\n# Existing project-specific rules migrated from the previous format\n" + existing
+            if !policyText.hasSuffix("\n") { policyText += "\n" }
+        }
+        try writePolicy(policyText, to: url)
+        return url
+    }
+
+    private static func writePolicy(_ text: String, to url: URL) throws {
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".c2cignore.\(UUID().uuidString).tmp")
+        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
+        guard descriptor >= 0 else { throw C2CError("無法建立 .c2cignore。") }
+        defer {
+            Darwin.close(descriptor)
+            try? FileManager.default.removeItem(at: temporary)
+        }
+        let data = Data(text.utf8)
+        try data.withUnsafeBytes { buffer in
+            var written = 0
+            while written < buffer.count {
+                let count = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: written), buffer.count - written)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { throw C2CError("無法寫入 .c2cignore。") }
+                written += count
+            }
+        }
+        guard fsync(descriptor) == 0, rename(temporary.path, url.path) == 0 else {
+            throw C2CError("無法儲存 .c2cignore。")
+        }
     }
 
     private static func rules(_ lines: [String]) -> [IgnoreRule] {
@@ -176,6 +285,10 @@ public final class Workspace {
         }
         self.name = projectConfig["name"] as? String ?? URL(fileURLWithPath: real).lastPathComponent
         self.ignoreRules = WorkspaceIgnoreRules(root: real)
+    }
+
+    func prepareEditableIgnorePolicy() throws -> URL {
+        try WorkspaceIgnoreRules.prepareEditablePolicy(root: root)
     }
 
     public func info() -> [String: Any] {
