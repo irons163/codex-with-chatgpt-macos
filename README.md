@@ -1,8 +1,8 @@
 # Codex with ChatGPT · Swift for macOS
 
-原生 Swift／macOS 工具，讓 Codex session 能開啟或繼續對應的 ChatGPT Quick Chat，並透過 CDP 將經安全規則篩選的工作區檔案附加到對話。專案也提供可選用的唯讀 MCP 橋接、menu bar App，以及 Sparkle 自動更新與 GitHub Release 流程。
+原生 Swift／macOS 工具，讓 Codex session 能開啟或繼續對應的 ChatGPT Quick Chat，並透過 CDP 將經安全規則篩選的工作區檔案附加到對話。專案提供 menu bar App、`c2c` 命令列工具，以及 Sparkle 自動更新與 GitHub Release 流程。
 
-**macOS 13 以上，Apple Silicon / Intel。無 Node.js 或 npm。** 這個專案保留原本的 `c2c` 命令列操作模式，並使用 Sparkle 2 提供已簽署 App 的自動更新。
+**macOS 13 以上，Apple Silicon / Intel。無 Node.js 或 npm。** App 與 CLI 都只在本機透過 CDP 操作桌面版介面，不會啟動 HTTP server、OAuth、MCP 或公開連線；Sparkle 2 負責已簽署 App 的自動更新。
 
 ## 建置與執行
 
@@ -30,12 +30,12 @@ swift test
 # 或 ./scripts/install.sh /your/prefix
 ```
 
-安裝腳本不會修改 shell 設定、Codex 設定或 ChatGPT 連線。
+安裝腳本不會修改 shell 設定或 Codex 設定。
 
 ## 使用（直接 CDP 注入）
 
 在 Xcode 開啟 `Package.swift`、選擇 `c2c` scheme 後直接按 Run 即可；程式會把該
-Swift Package 根目錄當成工作區，不必設定 Scheme arguments，也不需要 MCP、OAuth 或配對碼。從終端機啟動也只需：
+Swift Package 根目錄當成工作區，不必設定 Scheme arguments、連線服務或配對碼。從終端機啟動也只需：
 
 ```sh
 cd /path/to/project
@@ -51,26 +51,9 @@ c2c --workspace /path/to/project
 c2c --workspace /path/to/project --app /Applications/ChatGPT.app
 ```
 
-注入面板可另外選擇工作目錄；每次按「附加目前專案檔案」都會重新掃描磁碟，再透過 CDP
+注入面板可另外選擇工作目錄；開始新的附件批次時會重新掃描磁碟，再透過 CDP
 把目前的原始程式碼與文字檔附加到 ChatGPT／Quick Chat。它不會產生合併 Markdown，
 但仍屬於當次附件，不是賦予雲端 ChatGPT 本機檔案工具。程序保持前景執行以維持 CDP 連線。
-
-## 進階：MCP 橋接
-
-```sh
-c2c workspace --workspace /path/to/project --json
-c2c start --workspace /path/to/project --json
-c2c setup --workspace /path/to/project --json
-c2c status --workspace /path/to/project --json
-c2c doctor --workspace /path/to/project --no-fix --json
-c2c stop --workspace /path/to/project --json
-```
-
-`start` 與 `setup` 都只啟動綁定 `127.0.0.1` 的本機橋接；`setup` 另外產生五分鐘有效的配對碼。輸出的 `mcpUrl` 僅供同一台 Mac 上的 MCP client 使用，不提供公開連線。
-
-## 命令與狀態
-
-保留 `setup`、`start`、`serve`、`stop`、`restart`、`status`、`doctor`、`pair`、`unpair`、`logs`、`workspace`、`entry`、`sandbox-allow`、`update-check`、`session`、`prefs`、`record`。完整參數見 `c2c --help`。
 
 ## 工作目錄入口（明確指定 entry 命令）
 
@@ -88,27 +71,13 @@ c2c entry --app /Applications/ChatGPT.app --debug-port 57330
 
 目前桌面 App 的「檔案和資料夾」會開啟 Electron 原生 `NSOpenPanel`，不會觸發 Chromium 的 `Page.fileChooserOpened`。此實作不模擬拖放，而是找出 ChatGPT／Quick Chat composer 的隱藏檔案輸入，再呼叫 CDP `DOM.setFileInputFiles` 指定原始檔案路徑；找不到 ChatGPT 附件輸入時會停止並提示先開啟 Quick Chat，不會退回附加到 Codex 主輸入框。Swift 端會排除 `.gitignore`、`.c2cignore`、`.env`、金鑰、憑證、`.git`、build cache 與 symlink。檔案變更後再按一次即可附加新版。Ctrl-C 或程序離開時會移除面板。
 
-```sh
-c2c session set --mode project --project-url 'https://chatgpt.com/g/g-p-example/project'
-c2c session get --json
-c2c record --task task-1 --iteration 1 --changed-files 2 \
-  --tests 'swift test passed' --command 'swift test' --output-file /tmp/test.log --exit-code 0
-```
+## 附件安全邊界
 
-Swift 版預設狀態位於 `~/Library/Application Support/codex-with-chatgpt-macos/`，與原 TypeScript 安裝分開。`C2C_STATE_DIR` 可指定測試或自訂目錄；`C2C_CODEX_CONFIG` 可指定測試用 Codex 設定檔。狀態目錄採 `0700`、憑證與紀錄檔採 `0600`。
-
-`setup`、`doctor`（未加 `--no-fix`）與 `sandbox-allow` 會將狀態目錄加入 Codex 的 `sandbox_workspace_write.writable_roots`。`doctor --no-fix` 僅檢查。Swift 版需要重新配對；不要把執行中的 TypeScript runtime/token 檔案直接複製過來。
-
-## 唯讀工具與安全邊界
-
-MCP 提供九個工具：`workspace_info`、`list_directory`、`read_file`、`search_workspace`、`git_status`、`git_diff`、`test_status`、`execution_summary`、`execution_output`。
-
-- HTTP 僅綁定 `127.0.0.1`，沒有公開連線功能。
-- OAuth 使用配對碼、PKCE S256、工作區與工具 scope 檢查。
-- 敏感檔案、工作區外路徑與逃逸 symlink 不可讀取；`.c2cignore` 可再增加排除規則。
-- 執行輸出經命令白名單與敏感內容清洗後才可由 MCP 讀取。
-- MCP 沒有寫入、刪除或執行 shell 的工具。CLI 的 `record` 只儲存 Codex 提供的執行證據，不會執行 `--command`。
-- 背景服務採工作區鎖、身分驗證與私有 admin token，狀態不明時不會啟動第二份或向未知 PID 發送終止訊號。
+- 不啟動 HTTP server、OAuth、MCP、tunnel 或公開 listener。
+- 只掃描所選工作目錄，工作區外檔案與 symlink 不會加入附件。
+- `.c2cignore` 集中列出可查看、可修改的預設安全排除規則，並同時套用 `.gitignore`。
+- 每批最多 20 個檔案與 8 MiB；單檔最多 1 MiB，且只接受可驗證的 UTF-8 文字檔。
+- 附件是按下按鈕時的檔案內容，不會賦予 ChatGPT 持續讀取本機專案的權限。
 
 附帶的 [操作 Skill](skill/SKILL.md) 提供 Swift/macOS 工作流程，尚未自動安裝至個人 Codex 設定。
 

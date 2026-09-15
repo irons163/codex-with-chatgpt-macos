@@ -8,7 +8,7 @@ final class EntryTests: XCTestCase {
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         project = root.appendingPathComponent("project")
-        try AppPaths.ensureDirectory(project)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
     }
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
@@ -114,7 +114,8 @@ final class EntryTests: XCTestCase {
 
         let secretURL = project.appendingPathComponent("secrets.json")
         try "{\"token\":\"hidden\"}\n".write(to: secretURL, atomically: true, encoding: .utf8)
-        XCTAssertThrowsError(try Workspace(root: project.path).resolve("secrets.json"))
+        let protectedQueue = try EntryService(workspace: try Workspace(root: project.path)).workspaceAttachmentQueue()
+        XCTAssertFalse(protectedQueue.pages.flatMap { $0 }.contains(secretURL))
 
         try "\(WorkspaceIgnoreRules.policyMarker)\n# All project files are allowed by this policy.\n"
             .write(to: policyURL, atomically: true, encoding: .utf8)
@@ -168,7 +169,7 @@ final class EntryTests: XCTestCase {
     func testAttachmentScannerHasNoDepthOrThousandEntryCap() throws {
         let deep = project
             .appendingPathComponent("one/two/three/four/five/six", isDirectory: true)
-        try AppPaths.ensureDirectory(deep)
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
         try "deep\n".write(to: deep.appendingPathComponent("Deep.swift"), atomically: true, encoding: .utf8)
         for index in 0..<1_001 {
             let created = FileManager.default.createFile(
