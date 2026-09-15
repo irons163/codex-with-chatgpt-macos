@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v13"
+    public static let version = "workspace-attachments-v18"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -36,7 +36,7 @@ public enum EntryPanel {
           }
           if (previousHost) previousHost.remove();
           window[MARKER] = VERSION;
-          var WORKSPACE = \(workspace);
+          var DEFAULT_WORKSPACE = \(workspace);
           var host = document.createElement("div");
           host.id = "\(hostID)";
           host.style.cssText = "position:fixed;right:18px;bottom:110px;width:0;height:0;z-index:2147483647;";
@@ -45,48 +45,12 @@ public enum EntryPanel {
           style.textContent = [
             ":host{all:initial}",
             "*{box-sizing:border-box;font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif}",
-            ".bubble{position:absolute;left:0;top:0;width:40px;height:40px;border-radius:50%;cursor:pointer;user-select:none;-webkit-user-select:none;background:rgba(20,20,22,0.85);border:1px solid rgba(255,255,255,0.25);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,0.4);backdrop-filter:blur(6px)}",
-            ".bubble:hover{background:rgba(48,48,52,0.9)}",
-            ".bubble svg{width:20px;height:20px;fill:#fff;pointer-events:none}",
-            ".panel{position:absolute;right:0;bottom:48px;width:252px;padding:10px;border-radius:10px;background:rgba(18,18,20,0.96);border:1px solid rgba(255,255,255,0.14);box-shadow:0 8px 28px rgba(0,0,0,0.5);display:none}",
-            ".panel.open{display:block}",
-            ".panel h1{margin:0 0 2px;font-size:12px;font-weight:600;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-            ".panel p{margin:0 0 8px;font-size:10px;color:#888}",
-            ".panel button{display:block;width:100%;margin:0 0 6px;padding:8px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.16);background:rgba(255,255,255,0.08);color:#eee;font-size:12px;text-align:left;cursor:pointer}",
-            ".panel button:hover{background:rgba(255,255,255,0.16)}",
-            ".status{min-height:14px;margin:2px 0 0;font-size:10px;color:#9be29b}",
             ".toast{position:absolute;right:0;bottom:92px;width:252px;padding:8px 10px;border-radius:8px;background:rgba(18,18,20,0.96);border:1px solid rgba(255,255,255,0.14);color:#ddd;font-size:11px;line-height:1.4;display:none}",
             ".toast.show{display:block}"
           ].join("");
           shadow.appendChild(style);
-          var bubble = document.createElement("div");
-          bubble.className = "bubble";
-          bubble.title = "ChatGPT 工作目錄附件";
-          bubble.innerHTML = '<svg viewBox="0 0 24 24"><path d="M10 4l2 2h8a2 2 0 012 2v9a3 3 0 01-3 3H5a3 3 0 01-3-3V7a3 3 0 013-3h5zm-5 4v9a1 1 0 001 1h13a1 1 0 001-1V8H5z"/></svg>';
-          var panel = document.createElement("div");
-          panel.className = "panel";
-          var heading = document.createElement("h1");
-          heading.textContent = "ChatGPT 工作目錄附件";
-          var hint = document.createElement("p");
-          hint.textContent = "工作區：" + WORKSPACE;
-          var chooseButton = document.createElement("button");
-          chooseButton.textContent = "選擇工作目錄…";
-          var ignoreButton = document.createElement("button");
-          ignoreButton.textContent = "編輯排除規則…";
-          var attachButton = document.createElement("button");
-          attachButton.textContent = "附加目前專案檔案";
-          var status = document.createElement("div");
-          status.className = "status";
           var toast = document.createElement("div");
           toast.className = "toast";
-          panel.appendChild(heading);
-          panel.appendChild(hint);
-          panel.appendChild(chooseButton);
-          panel.appendChild(ignoreButton);
-          panel.appendChild(attachButton);
-          panel.appendChild(status);
-          shadow.appendChild(bubble);
-          shadow.appendChild(panel);
           shadow.appendChild(toast);
           document.documentElement.appendChild(host);
           var quickChatStyle = document.createElement("style");
@@ -101,7 +65,14 @@ public enum EntryPanel {
             "[data-c2c-quick-chat-button]:focus-visible,[data-c2c-quick-chat-unbind-button]:focus-visible{outline:2px solid var(--color-ring,currentColor);outline-offset:0}",
             "[data-c2c-quick-chat-button] svg{width:16px;height:16px;pointer-events:none}",
             "[data-c2c-quick-chat-unbind-button] svg{width:12px;height:12px;pointer-events:none}",
-            "[data-c2c-quick-chat-button][data-c2c-has-chat=true]{color:var(--color-text,currentColor)}"
+            "[data-c2c-quick-chat-button][data-c2c-has-chat=true]{color:var(--color-text,currentColor)}",
+            "[data-c2c-session-menu]{position:fixed;z-index:2147483646;width:236px;padding:8px;border-radius:10px;background:var(--color-background-elevated,#202024);border:1px solid var(--color-border-default,rgba(255,255,255,.16));box-shadow:0 10px 32px rgba(0,0,0,.42);color:var(--color-text,#eee);font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif}",
+            "[data-c2c-session-menu-title]{padding:3px 6px 1px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+            "[data-c2c-session-menu-workspace]{padding:0 6px 7px;font-size:10px;color:var(--color-text-tertiary,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+            "[data-c2c-session-menu] button{appearance:none;display:block;width:100%;margin:0 0 4px;padding:8px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;text-align:left;cursor:pointer}",
+            "[data-c2c-session-menu] button:hover{background:var(--color-background-primary-ghost-hover,rgba(127,127,127,.16))}",
+            "[data-c2c-session-menu] button:disabled{opacity:.5;cursor:default}",
+            "[data-c2c-session-menu-status]{min-height:13px;padding:2px 6px 0;color:#72d68b;font-size:10px;line-height:1.3}"
           ].join("");
           document.head.appendChild(quickChatStyle);
           var quickChatBindings = {};
@@ -122,6 +93,14 @@ public enum EntryPanel {
           var quickChatDisposed = false;
           var quickChatScanScheduled = false;
           var quickChatScanFrame = 0;
+          var quickChatCaptureTimer = 0;
+          var activeQuickChatKnownConversationIDs = [];
+          var sessionMenu = null;
+          var sessionMenuThreadID = null;
+          var sessionMenuBusy = false;
+          var sessionMenuStatus = "";
+          var sessionMenuWorkspace = null;
+          var attachmentState = { hasPendingBatch: false, remainingCount: 0, threadID: "" };
           function saveQuickChatBindings() {
             try { localStorage.setItem(QUICK_CHAT_STORAGE, JSON.stringify(quickChatBindings)); } catch (error) {}
           }
@@ -142,6 +121,12 @@ public enum EntryPanel {
           function currentQuickChatID(panel) {
             var context = panel && panel.querySelector("[data-above-composer-conversation-id]");
             return normalizeQuickChatID(context && context.getAttribute("data-above-composer-conversation-id"));
+          }
+          function quickChatLoadFailed(panel) {
+            var text = String((panel && panel.innerText) || "").toLowerCase();
+            return text.indexOf("無法載入此 chatgpt 對話") >= 0 ||
+              text.indexOf("unable to load this chatgpt conversation") >= 0 ||
+              text.indexOf("couldn't load this chatgpt conversation") >= 0;
           }
           function nativeQuickChatButton() {
             return Array.from(document.querySelectorAll("button")).find(function (button) {
@@ -167,6 +152,20 @@ public enum EntryPanel {
             var key = Object.keys(element).find(function (name) { return name.indexOf("__reactFiber$") === 0; });
             return key ? element[key] : null;
           }
+          function quickChatConversationIDs(panel) {
+            var recent = panel && panel.querySelector('section[aria-labelledby="quick-chat-recent-heading"]');
+            var fiber = reactFiber(recent || (panel && panel.querySelector("[data-thread-find-composer]")));
+            for (var depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+              var props = fiber.memoizedProps;
+              if (!props || !Array.isArray(props.conversations)) continue;
+              return props.conversations.map(function (conversation) {
+                return normalizeQuickChatID(conversation && conversation.conversationId);
+              }).filter(function (conversationID) {
+                return conversationID && conversationID.indexOf("local-chatgpt:") !== 0;
+              });
+            }
+            return [];
+          }
           function renderedConversationButton(panel, conversationID) {
             return Array.from(panel.querySelectorAll("li button")).find(function (button) {
               var fiber = reactFiber(button);
@@ -181,11 +180,9 @@ public enum EntryPanel {
             if (rendered) { rendered.click(); return true; }
             var recent = panel.querySelector('section[aria-labelledby="quick-chat-recent-heading"]');
             var fiber = reactFiber(recent || panel.querySelector("[data-thread-find-composer]"));
-            var selectionProps = null;
             for (var depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
               var props = fiber.memoizedProps;
               if (!props || !Array.isArray(props.conversations) || typeof props.onConversationSelect !== "function") continue;
-              selectionProps = props;
               var conversation = props.conversations.find(function (item) {
                 return normalizeQuickChatID(item && item.conversationId) === conversationID;
               });
@@ -193,11 +190,7 @@ public enum EntryPanel {
               props.onConversationSelect(conversation.conversationId, conversation.title || fallbackTitle);
               return true;
             }
-            if (!selectionProps) return false;
-            // Quick Chat's native handler accepts (conversationID, title). It can
-            // restore a conversation that is not part of the three rendered recents.
-            selectionProps.onConversationSelect(conversationID, fallbackTitle);
-            return true;
+            return false;
           }
           function setQuickChatBinding(threadID, conversationID) {
             conversationID = normalizeQuickChatID(conversationID);
@@ -220,12 +213,27 @@ public enum EntryPanel {
             if (panel) {
               quickChatWasOpen = true;
               if (activeQuickChatThreadID) {
+                if (quickChatLoadFailed(panel)) {
+                  return;
+                }
                 var conversationID = currentQuickChatID(panel);
-                if (conversationID) setQuickChatBinding(activeQuickChatThreadID, conversationID);
+                if (conversationID && conversationID.indexOf("local-chatgpt:") !== 0) {
+                  setQuickChatBinding(activeQuickChatThreadID, conversationID);
+                } else {
+                  var availableIDs = quickChatConversationIDs(panel);
+                  var createdIDs = availableIDs.filter(function (conversationID) {
+                    return activeQuickChatKnownConversationIDs.indexOf(conversationID) < 0;
+                  });
+                  if (createdIDs.length === 1) {
+                    setQuickChatBinding(activeQuickChatThreadID, createdIDs[0]);
+                    activeQuickChatKnownConversationIDs = availableIDs;
+                  }
+                }
               }
             } else if (quickChatWasOpen && !openingQuickChat) {
               quickChatWasOpen = false;
               activeQuickChatThreadID = null;
+              activeQuickChatKnownConversationIDs = [];
             }
           }
           function newQuickChatButton(panel) {
@@ -235,10 +243,12 @@ public enum EntryPanel {
             }) || null;
           }
           async function openQuickChatForThread(row) {
-            if (openingQuickChat) return;
+            if (openingQuickChat) return false;
             openingQuickChat = true;
+            var succeeded = false;
             var threadID = row.getAttribute("data-app-action-sidebar-thread-id") || "";
             var previousActiveThreadID = activeQuickChatThreadID;
+            activeQuickChatKnownConversationIDs = [];
             try {
               if (row.getAttribute("data-app-action-sidebar-thread-selected") !== "true") {
                 row.click();
@@ -246,7 +256,7 @@ public enum EntryPanel {
                   return row.getAttribute("data-app-action-sidebar-thread-selected") === "true";
                 }, 2000);
               }
-              activeQuickChatThreadID = threadID;
+              activeQuickChatThreadID = null;
               var panel = quickChatPanel();
               if (!panel) {
                 var nativeButton = nativeQuickChatButton();
@@ -255,9 +265,22 @@ public enum EntryPanel {
                 panel = await waitForQuickChat(quickChatPanel, 2500);
               }
               if (!panel) throw new Error("Quick Chat 未開啟");
+              activeQuickChatKnownConversationIDs = quickChatConversationIDs(panel);
+              activeQuickChatThreadID = threadID;
 
               var mappedID = normalizeQuickChatID(quickChatBindings[threadID]);
               var currentID = currentQuickChatID(panel);
+              if (mappedID && quickChatLoadFailed(panel)) {
+                var recoveryButton = newQuickChatButton(panel);
+                if (recoveryButton) recoveryButton.click();
+                await waitForQuickChat(function () {
+                  var recoveredPanel = quickChatPanel();
+                  return recoveredPanel && !quickChatLoadFailed(recoveredPanel) ? recoveredPanel : null;
+                }, 2500);
+                panel = quickChatPanel() || panel;
+                currentID = currentQuickChatID(panel);
+                showToast("已離開錯誤畫面，正在重試原本的 Quick Chat 綁定。");
+              }
               if (mappedID && currentID !== mappedID) {
                 var createButton = newQuickChatButton(panel);
                 if (createButton) {
@@ -270,13 +293,19 @@ public enum EntryPanel {
                 }
                 var threadTitle = row.getAttribute("data-app-action-sidebar-thread-title") || "Quick Chat";
                 if (!selectQuickChatConversation(panel, mappedID, threadTitle)) {
-                  throw new Error("找不到 Quick Chat 的對話切換功能");
-                }
-                var resumed = await waitForQuickChat(function () {
-                  return currentQuickChatID(quickChatPanel()) === mappedID;
-                }, 4000);
-                if (!resumed) {
-                  throw new Error("無法繼續這個 session 原本的 Quick Chat 對話");
+                  throw new Error("原本的 Quick Chat 對話目前不在可用清單；綁定已保留，可稍後重試或按 × 解綁");
+                } else {
+                  var resumed = await waitForQuickChat(function () {
+                    var nextPanel = quickChatPanel();
+                    if (quickChatLoadFailed(nextPanel)) return "failed";
+                    return currentQuickChatID(nextPanel) === mappedID ? "resumed" : null;
+                  }, 4000);
+                  if (resumed !== "resumed") {
+                    panel = quickChatPanel() || panel;
+                    var resetButton = newQuickChatButton(panel);
+                    if (resetButton) resetButton.click();
+                    throw new Error("原本的 Quick Chat 對話暫時無法載入；綁定已保留，可稍後重試或按 × 解綁");
+                  }
                 }
               }
 
@@ -298,6 +327,7 @@ public enum EntryPanel {
               setQuickChatBinding(threadID, currentQuickChatID(panel));
               var editor = panel.querySelector('[contenteditable="true"][role="textbox"], textarea[role="textbox"]');
               if (editor) editor.focus();
+              succeeded = true;
             } catch (error) {
               console.warn("c2c Quick Chat:", error);
               showToast(error && error.message ? error.message : "Quick Chat 開啟失敗");
@@ -306,6 +336,7 @@ public enum EntryPanel {
               captureActiveQuickChat();
               scheduleQuickChatScan();
             }
+            return succeeded;
           }
           function quickChatIcon() {
             return '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16"><path d="M7.983 5.304a.526.526 0 01.526.526v1.649h1.649a.525.525 0 110 1.051H8.509v1.65a.526.526 0 01-1.051 0V8.53h-1.65a.525.525 0 110-1.051h1.65V5.83a.526.526 0 01.525-.526z" fill="currentColor"/><path fill-rule="evenodd" d="M8 1.808c3.575 0 6.525 2.745 6.525 6.192 0 3.448-2.95 6.192-6.525 6.192-1.215 0-2.241-.363-3.245-.832l-1.768.459a.66.66 0 01-.807-.78l.37-1.675C2.036 10.36 1.475 9.382 1.475 8 1.475 4.553 4.425 1.808 8 1.808zm0 1.051C4.948 2.859 2.525 5.189 2.525 8c0 1.134.455 1.883 1.027 3.015a.65.65 0 01.054.44l-.263 1.186 1.283-.332a.65.65 0 01.45.043l.366.17c.85.378 1.65.62 2.558.62 3.052 0 5.474-2.33 5.475-5.142 0-2.811-2.423-5.141-5.475-5.141z" fill="currentColor"/></svg>';
@@ -313,6 +344,120 @@ public enum EntryPanel {
           function unbindQuickChatIcon() {
             return '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16"><path d="M4.25 4.25l7.5 7.5m0-7.5l-7.5 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
           }
+          function workspaceForSession(row) {
+            var fiber = reactFiber(row);
+            for (var depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+              var props = fiber.memoizedProps;
+              if (!props || typeof props.displayCwd !== "string" || props.displayCwd.indexOf("/") !== 0) continue;
+              var path = props.displayCwd.replace(/\\/+$/, "") || "/";
+              var label = typeof props.hoverCardProjectLabel === "string" && props.hoverCardProjectLabel
+                ? props.hoverCardProjectLabel
+                : (path.split("/").filter(Boolean).pop() || DEFAULT_WORKSPACE);
+              return { path: path, label: label };
+            }
+            return null;
+          }
+          function attachmentActionLabel() {
+            return attachmentState.hasPendingBatch && attachmentState.threadID === sessionMenuThreadID
+              ? "送出後附加下一批（剩 " + (attachmentState.remainingCount || 0) + " 個）"
+              : "附加「" + (sessionMenuWorkspace ? sessionMenuWorkspace.label : "此 session") + "」專案檔案";
+          }
+          function closeSessionMenu() {
+            if (sessionMenu) sessionMenu.remove();
+            sessionMenu = null;
+            sessionMenuThreadID = null;
+            sessionMenuWorkspace = null;
+          }
+          function syncSessionMenu() {
+            if (!sessionMenu) return;
+            var workspace = sessionMenu.querySelector("[data-c2c-session-menu-workspace]");
+            if (workspace) workspace.textContent = sessionMenuWorkspace
+              ? "工作目錄：" + sessionMenuWorkspace.path
+              : "找不到這個 session 的工作目錄";
+            var attach = sessionMenu.querySelector('[data-c2c-session-action="attach"]');
+            if (attach) attach.textContent = attachmentActionLabel();
+            var ignore = sessionMenu.querySelector('[data-c2c-session-action="ignore"]');
+            if (ignore) ignore.textContent = "編輯「" + (sessionMenuWorkspace ? sessionMenuWorkspace.label : "此 session") + "」排除規則…";
+            var statusNode = sessionMenu.querySelector("[data-c2c-session-menu-status]");
+            if (statusNode) statusNode.textContent = sessionMenuStatus;
+            sessionMenu.querySelectorAll("button").forEach(function (button) {
+              var needsWorkspace = button.getAttribute("data-c2c-session-action") !== "open";
+              button.disabled = sessionMenuBusy || (needsWorkspace && !sessionMenuWorkspace);
+            });
+          }
+          function positionSessionMenu(anchor) {
+            if (!sessionMenu || !anchor) return;
+            var rect = anchor.getBoundingClientRect();
+            var width = sessionMenu.offsetWidth || 236;
+            var height = sessionMenu.offsetHeight || 150;
+            var left = Math.min(rect.right + 8, window.innerWidth - width - 8);
+            var top = Math.min(Math.max(rect.top - 8, 8), window.innerHeight - height - 8);
+            sessionMenu.style.left = Math.max(left, 8) + "px";
+            sessionMenu.style.top = Math.max(top, 8) + "px";
+          }
+          function openSessionMenu(row, anchor) {
+            var threadID = row.getAttribute("data-app-action-sidebar-thread-id") || "";
+            if (sessionMenu && sessionMenuThreadID === threadID) { closeSessionMenu(); return; }
+            closeSessionMenu();
+            sessionMenuThreadID = threadID;
+            sessionMenuWorkspace = workspaceForSession(row);
+            sessionMenuStatus = "";
+            var menu = document.createElement("div");
+            menu.setAttribute("data-c2c-session-menu", "true");
+            var title = document.createElement("div");
+            title.setAttribute("data-c2c-session-menu-title", "true");
+            title.textContent = row.getAttribute("data-app-action-sidebar-thread-title") || "這個 session";
+            var workspace = document.createElement("div");
+            workspace.setAttribute("data-c2c-session-menu-workspace", "true");
+            var openButton = document.createElement("button");
+            openButton.type = "button";
+            openButton.setAttribute("data-c2c-session-action", "open");
+            openButton.textContent = quickChatBindings[threadID] ? "繼續 Quick Chat" : "開啟新的 Quick Chat";
+            openButton.addEventListener("click", async function () {
+              closeSessionMenu();
+              await openQuickChatForThread(row);
+            });
+            var attach = document.createElement("button");
+            attach.type = "button";
+            attach.setAttribute("data-c2c-session-action", "attach");
+            attach.addEventListener("click", async function () {
+              var selectedWorkspace = sessionMenuWorkspace;
+              closeSessionMenu();
+              if (selectedWorkspace && await openQuickChatForThread(row)) {
+                callNative("attach-workspace-files", false, threadID, selectedWorkspace.path);
+              }
+            });
+            var ignore = document.createElement("button");
+            ignore.type = "button";
+            ignore.setAttribute("data-c2c-session-action", "ignore");
+            ignore.addEventListener("click", function () {
+              var selectedWorkspace = sessionMenuWorkspace;
+              closeSessionMenu();
+              if (selectedWorkspace) callNative("edit-ignore-rules", false, threadID, selectedWorkspace.path);
+            });
+            var statusNode = document.createElement("div");
+            statusNode.setAttribute("data-c2c-session-menu-status", "true");
+            menu.appendChild(title);
+            menu.appendChild(workspace);
+            menu.appendChild(openButton);
+            menu.appendChild(attach);
+            menu.appendChild(ignore);
+            menu.appendChild(statusNode);
+            document.body.appendChild(menu);
+            sessionMenu = menu;
+            syncSessionMenu();
+            positionSessionMenu(anchor);
+            if (sessionMenuWorkspace) callNative("get-state", true, threadID, sessionMenuWorkspace.path);
+          }
+          function dismissSessionMenu(event) {
+            if (!sessionMenu) return;
+            if (event.type === "keydown" && event.key !== "Escape") return;
+            if (event.type === "pointerdown" && (sessionMenu.contains(event.target) || event.target.closest('[data-c2c-quick-chat-button="true"]'))) return;
+            closeSessionMenu();
+          }
+          document.addEventListener("pointerdown", dismissSessionMenu, true);
+          document.addEventListener("keydown", dismissSessionMenu, true);
+          window.addEventListener("resize", closeSessionMenu);
           function installQuickChatButton(row) {
             var threadID = row.getAttribute("data-app-action-sidebar-thread-id");
             if (!threadID) return;
@@ -326,7 +471,7 @@ public enum EntryPanel {
                 event.preventDefault();
                 event.stopPropagation();
                 event.stopImmediatePropagation();
-                openQuickChatForThread(row);
+                openSessionMenu(row, button);
               });
               row.appendChild(button);
             }
@@ -334,7 +479,7 @@ public enum EntryPanel {
             var hasChat = !!quickChatBindings[threadID];
             row.setAttribute("data-c2c-quick-chat-state", hasChat ? "bound" : "unbound");
             button.setAttribute("data-c2c-has-chat", hasChat ? "true" : "false");
-            button.setAttribute("aria-label", (hasChat ? "繼續「" : "為「") + title + (hasChat ? "」的快速對話" : "」開啟快速對話"));
+            button.setAttribute("aria-label", "開啟「" + title + "」的 ChatGPT 專案選單");
             button.title = button.getAttribute("aria-label");
             var unbindButton = row.querySelector(':scope > [data-c2c-quick-chat-unbind-button="true"]');
             if (hasChat && !unbindButton) {
@@ -379,9 +524,16 @@ public enum EntryPanel {
             attributes: true,
             attributeFilter: ["data-above-composer-conversation-id", "data-app-action-sidebar-thread-selected"]
           });
+          quickChatCaptureTimer = window.setInterval(captureActiveQuickChat, 500);
           window[QUICK_CHAT_CLEANUP] = function () {
             quickChatDisposed = true;
             quickChatObserver.disconnect();
+            closeSessionMenu();
+            document.removeEventListener("pointerdown", dismissSessionMenu, true);
+            document.removeEventListener("keydown", dismissSessionMenu, true);
+            window.removeEventListener("resize", closeSessionMenu);
+            if (quickChatCaptureTimer) window.clearInterval(quickChatCaptureTimer);
+            quickChatCaptureTimer = 0;
             if (quickChatScanFrame) cancelAnimationFrame(quickChatScanFrame);
             quickChatScanFrame = 0;
             quickChatScanScheduled = false;
@@ -399,34 +551,34 @@ public enum EntryPanel {
             clearTimeout(toastTimer);
             toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 4000);
           }
-          function setStatus(message) { status.textContent = message; }
+          function setStatus(message) {
+            sessionMenuStatus = message;
+            syncSessionMenu();
+          }
           function setBusy(busy) {
-            chooseButton.disabled = busy;
-            ignoreButton.disabled = busy;
-            attachButton.disabled = busy;
+            sessionMenuBusy = busy;
+            syncSessionMenu();
           }
           function updateQueueState(payload) {
-            WORKSPACE = payload.workspace || WORKSPACE;
-            hint.textContent = "工作區：" + WORKSPACE;
-            if (payload.hasPendingBatch === true) {
-              attachButton.textContent = "送出後附加下一批（剩 " + (payload.remainingCount || 0) + " 個）";
-            } else {
-              attachButton.textContent = "附加目前專案檔案";
-            }
+            attachmentState.hasPendingBatch = payload.hasPendingBatch === true;
+            attachmentState.remainingCount = payload.remainingCount || 0;
+            attachmentState.threadID = payload.attachmentThreadID || "";
+            syncSessionMenu();
           }
-          function callNative(action, silent) {
+          function callNative(action, silent, threadID, workspacePath) {
             if (typeof window[BINDING] !== "function") {
               showToast("工作目錄連線尚未就緒，請確認 c2c 仍在執行。");
               return;
             }
             setBusy(true);
             if (!silent) setStatus("處理中…");
-            try { window[BINDING](JSON.stringify({ action: action })); }
+            try { window[BINDING](JSON.stringify({
+              action: action,
+              threadID: threadID || "",
+              workspacePath: workspacePath || ""
+            })); }
             catch (error) { setBusy(false); setStatus(""); showToast("無法呼叫 c2c：" + error); }
           }
-          chooseButton.addEventListener("click", function () { callNative("choose-workspace"); });
-          ignoreButton.addEventListener("click", function () { callNative("edit-ignore-rules"); });
-          attachButton.addEventListener("click", function () { callNative("attach-workspace-files"); });
           window[RESULT] = function (payloadText) {
             var payload = null;
             try { payload = JSON.parse(String(payloadText)); } catch (error) {}
@@ -435,14 +587,10 @@ public enum EntryPanel {
             if (payload.ok === true) {
               if (payload.action === "state") {
                 updateQueueState(payload);
-              } else if (payload.action === "choose-workspace") {
-                WORKSPACE = payload.workspace || WORKSPACE;
-                hint.textContent = "工作區：" + WORKSPACE;
-                attachButton.textContent = "附加目前專案檔案";
-                setStatus("已選擇工作目錄");
-                showToast("工作目錄已切換為「" + WORKSPACE + "」。");
               } else if (payload.action === "edit-ignore-rules") {
-                attachButton.textContent = "附加目前專案檔案";
+                attachmentState.hasPendingBatch = false;
+                attachmentState.remainingCount = 0;
+                attachmentState.threadID = "";
                 setStatus("已開啟 .c2cignore");
                 showToast("排除規則已用文字編輯器開啟；儲存後，下次附加會自動重新載入。");
               } else if (payload.action === "attach-workspace-files") {
@@ -452,15 +600,20 @@ public enum EntryPanel {
                 var remainingCount = payload.remainingCount || 0;
                 setStatus("已附加第 " + batchNumber + "/" + batchCount + " 批（" + count + " 個）");
                 if (payload.hasMore === true) {
-                  attachButton.textContent = "送出後附加下一批（剩 " + remainingCount + " 個）";
+                  attachmentState.hasPendingBatch = true;
+                  attachmentState.remainingCount = remainingCount;
+                  attachmentState.threadID = payload.threadID || "";
                   showToast("第 " + batchNumber + "/" + batchCount + " 批已附加。請先送出這則訊息，再按下一批。" +
                     (payload.incomplete === true ? " 部分檔案因無法安全讀取而未列入。" : ""));
                 } else {
-                  attachButton.textContent = batchCount > 1 ? "從第一批重新開始" : "重新附加目前專案檔案";
+                  attachmentState.hasPendingBatch = false;
+                  attachmentState.remainingCount = 0;
+                  attachmentState.threadID = "";
                   showToast(payload.incomplete === true
                     ? "可安全讀取的批次已完成；部分檔案未列入。"
                     : "第 " + batchNumber + "/" + batchCount + " 批已附加；全部批次完成。");
                 }
+                syncSessionMenu();
               }
             } else if (payload.cancelled === true) {
               setStatus(""); showToast("已取消。");
@@ -468,35 +621,6 @@ public enum EntryPanel {
               setStatus(""); showToast(payload.error || "讀取工作目錄失敗。");
             }
           };
-          callNative("get-state", true);
-          var drag = null;
-          bubble.addEventListener("pointerdown", function (event) {
-            if (event.button !== 0) return;
-            drag = { startX: event.clientX, startY: event.clientY, moved: false, rect: bubble.getBoundingClientRect() };
-            try { bubble.setPointerCapture(event.pointerId); } catch (error) {}
-            event.preventDefault();
-          });
-          bubble.addEventListener("pointermove", function (event) {
-            if (!drag) return;
-            var dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
-            if (Math.abs(dx) + Math.abs(dy) < 5) return;
-            if (!drag.moved) {
-              drag.moved = true;
-              host.style.right = "auto"; host.style.bottom = "auto";
-              var current = bubble.getBoundingClientRect();
-              host.style.left = current.left + "px"; host.style.top = current.top + "px";
-            }
-            var left = Math.min(Math.max(drag.rect.left + dx, 4), window.innerWidth - drag.rect.width - 4);
-            var top = Math.min(Math.max(drag.rect.top + dy, 4), window.innerHeight - drag.rect.height - 4);
-            host.style.left = left + "px"; host.style.top = top + "px";
-          });
-          bubble.addEventListener("pointerup", function () {
-            if (!drag) return;
-            var moved = drag.moved;
-            drag = null;
-            if (!moved) panel.classList.toggle("open");
-          });
-          bubble.addEventListener("pointercancel", function () { drag = null; });
           return "installed";
         })();
         """

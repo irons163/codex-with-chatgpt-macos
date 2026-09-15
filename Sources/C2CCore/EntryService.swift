@@ -73,7 +73,7 @@ public final class EntryService {
     private var sessions: [String: CDPSession] = [:]
     private var pickerBusy = false
     private var attachmentBusy = false
-    private var attachmentQueue: AttachmentQueueSnapshot?
+    private var attachmentQueues: [String: AttachmentQueueSnapshot] = [:]
     private var stopped = false
 
     public init(workspace: Workspace, appOverride: URL? = nil, preferredPort: Int? = nil, log: @escaping (String) -> Void = { print($0) }) {
@@ -164,57 +164,32 @@ public final class EntryService {
         guard name == EntryPanel.bindingName else { return }
         switch payload["action"] as? String {
         case "get-state":
-            Task { [weak self] in await self?.respond(session, self?.entryStatePayload() ?? ["ok": false]) }
-        case "choose-workspace":
-            Task { [weak self] in await self?.performChooseWorkspace(session: session) }
+            let threadID = payload["threadID"] as? String ?? ""
+            let workspacePath = payload["workspacePath"] as? String ?? ""
+            Task { [weak self] in await self?.performGetState(session: session, threadID: threadID, workspacePath: workspacePath) }
         case "edit-ignore-rules":
-            Task { [weak self] in await self?.performEditIgnoreRules(session: session) }
+            let threadID = payload["threadID"] as? String ?? ""
+            let workspacePath = payload["workspacePath"] as? String ?? ""
+            Task { [weak self] in await self?.performEditIgnoreRules(session: session, threadID: threadID, workspacePath: workspacePath) }
         case "attach-workspace-files":
-            Task { [weak self] in await self?.performAttachWorkspaceFiles(session: session) }
+            let threadID = payload["threadID"] as? String ?? ""
+            let workspacePath = payload["workspacePath"] as? String ?? ""
+            Task { [weak self] in await self?.performAttachWorkspaceFiles(session: session, threadID: threadID, workspacePath: workspacePath) }
         default:
             Task { await respond(session, ["ok": false, "error": "Unknown action"]) }
         }
     }
 
-    private func performChooseWorkspace(session: CDPSession) async {
-        let wasBusy = withLock {
-            let busy = pickerBusy || attachmentBusy
-            if !busy { pickerBusy = true }
-            return busy
-        }
-        guard !wasBusy else {
-            await respond(session, ["ok": false, "error": "已經有目錄選擇視窗開啟中。"])
-            return
-        }
-        defer { withLock { pickerBusy = false } }
-        let script = "POSIX path of (choose folder with prompt \"選擇要讓 ChatGPT 讀取的工作目錄\")"
-        guard let result = try? runCommand("/usr/bin/osascript", ["-e", script], timeout: 3600) else {
-            await respond(session, ["ok": false, "error": "無法啟動目錄選擇視窗。"])
-            return
-        }
-        if result.code != 0 {
-            if result.output.range(of: "user canceled", options: [.regularExpression, .caseInsensitive]) != nil {
-                await respond(session, ["ok": false, "cancelled": true])
-            } else {
-                await respond(session, ["ok": false, "error": "選擇工作目錄失敗。"])
-            }
-            return
-        }
+    private func performGetState(session: CDPSession, threadID: String, workspacePath: String) async {
         do {
-            let selected = try Workspace(root: result.output.trimmingCharacters(in: .whitespacesAndNewlines))
-            withLock {
-                workspace = selected
-                attachmentQueue = nil
-            }
-            log("Selected workspace: \(selected.root)")
-            await respond(session, ["ok": true, "action": "choose-workspace", "workspace": selected.name])
-            await broadcastState()
+            let selected = try requestedWorkspace(path: workspacePath)
+            await respond(session, entryStatePayload(threadID: threadID, workspace: selected))
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
         }
     }
 
-    private func performEditIgnoreRules(session: CDPSession) async {
+    private func performEditIgnoreRules(session: CDPSession, threadID: String, workspacePath: String) async {
         let wasBusy = withLock {
             let busy = pickerBusy || attachmentBusy
             if !busy { pickerBusy = true }
@@ -226,24 +201,21 @@ public final class EntryService {
         }
         defer { withLock { pickerBusy = false } }
         do {
-            let selected = withLock { workspace }
+            let selected = try requestedWorkspace(path: workspacePath)
             let policyURL = try selected.prepareEditableIgnorePolicy()
             let refreshed = try Workspace(root: selected.root)
             withLock {
-                if workspace.root == selected.root {
-                    workspace = refreshed
-                    attachmentQueue = nil
-                }
+                if !threadID.isEmpty { attachmentQueues.removeValue(forKey: threadID) }
             }
             let result = try runCommand("/usr/bin/open", ["-t", policyURL.path], timeout: 20)
             guard result.code == 0 else { throw C2CError("無法開啟 .c2cignore。") }
             await respond(session, [
                 "ok": true,
                 "action": "edit-ignore-rules",
+                "threadID": threadID,
                 "workspace": refreshed.name,
                 "path": policyURL.path
             ])
-            await broadcastState()
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
         }
@@ -365,11 +337,15 @@ public final class EntryService {
         return batch
     }
 
-    private func performAttachWorkspaceFiles(session: CDPSession) async {
-        let request = withLock { () -> (busy: Bool, workspace: Workspace, queue: AttachmentQueueSnapshot?) in
+    private func performAttachWorkspaceFiles(session: CDPSession, threadID: String, workspacePath: String) async {
+        guard !threadID.isEmpty else {
+            await respond(session, ["ok": false, "error": "找不到發起附件操作的 session。"])
+            return
+        }
+        let request = withLock { () -> (busy: Bool, queue: AttachmentQueueSnapshot?) in
             let busy = attachmentBusy || pickerBusy
             if !busy { attachmentBusy = true }
-            return (busy, workspace, attachmentQueue)
+            return (busy, attachmentQueues[threadID])
         }
         guard !request.busy else {
             await respond(session, ["ok": false, "error": "附件仍在處理中，請稍候。"])
@@ -377,11 +353,10 @@ public final class EntryService {
         }
         defer { withLock { attachmentBusy = false } }
         do {
-            let selected = try Workspace(root: request.workspace.root)
-            withLock {
-                if workspace.root == request.workspace.root { workspace = selected }
-            }
-            var queue = try request.queue ?? workspaceAttachmentQueue(
+            let selected = try requestedWorkspace(path: workspacePath)
+            var queue = try request.queue.flatMap { existing in
+                existing.workspaceID == selected.id && existing.workspaceRoot == selected.root ? existing : nil
+            } ?? workspaceAttachmentQueue(
                 workspace: selected,
                 maxFiles: Self.chatGPTMaximumAttachmentFiles,
                 maxFileBytes: 1 * 1024 * 1024,
@@ -398,8 +373,7 @@ public final class EntryService {
                 selected.validatedTextFile(at: $0, maxFileBytes: queue.maxFileBytes)?.url
             }
             guard validatedFiles.count == batch.files.count else {
-                withLock { attachmentQueue = nil }
-                await broadcastState()
+                _ = withLock { attachmentQueues.removeValue(forKey: threadID) }
                 throw C2CError("批次快照中的檔案已刪除或不再安全，已重置；請從第一批重新開始。")
             }
             if try await chatGPTComposerHasAttachments(session: session) {
@@ -408,14 +382,13 @@ public final class EntryService {
             try await attachToChatGPT(validatedFiles, session: session)
             if batch.hasMore { queue.nextPageIndex += 1 }
             withLock {
-                if workspace.root == selected.root {
-                    attachmentQueue = batch.hasMore ? queue : nil
-                }
+                attachmentQueues[threadID] = batch.hasMore ? queue : nil
             }
             log("Attached workspace batch \(batch.pageIndex + 1)/\(batch.pageCount) (\(batch.files.count) file(s)) to ChatGPT for \(selected.name).")
             await respond(session, [
                 "ok": true,
                 "action": "attach-workspace-files",
+                "threadID": threadID,
                 "workspace": selected.name,
                 "count": batch.files.count,
                 "candidateCount": batch.candidateCount,
@@ -426,7 +399,6 @@ public final class EntryService {
                 "incomplete": batch.incomplete,
                 "truncated": batch.truncated
             ])
-            await broadcastState()
         } catch {
             await respond(session, ["ok": false, "error": error.localizedDescription])
         }
@@ -436,29 +408,28 @@ public final class EntryService {
         (try await session.evaluateValue(Self.chatGPTComposerHasAttachmentsExpression, timeout: 5) as? Bool) == true
     }
 
-    private func entryStatePayload() -> [String: Any] {
+    private func requestedWorkspace(path: String) throws -> Workspace {
+        guard path.hasPrefix("/") else { throw C2CError("找不到這個 session 的有效工作目錄。") }
+        return try Workspace(root: path)
+    }
+
+    private func entryStatePayload(threadID: String, workspace selected: Workspace) -> [String: Any] {
         withLock {
             var payload: [String: Any] = [
                 "ok": true,
                 "action": "state",
-                "workspace": workspace.name,
+                "workspace": selected.name,
                 "hasPendingBatch": false
             ]
-            if let queue = attachmentQueue, let batch = queue.currentBatch,
-               queue.workspaceID == workspace.id {
+            if let queue = attachmentQueues[threadID], let batch = queue.currentBatch,
+               queue.workspaceID == selected.id, queue.workspaceRoot == selected.root {
                 payload["hasPendingBatch"] = true
+                payload["attachmentThreadID"] = threadID
                 payload["batchNumber"] = batch.pageIndex + 1
                 payload["batchCount"] = batch.pageCount
                 payload["remainingCount"] = batch.files.count + batch.remainingCount
             }
             return payload
-        }
-    }
-
-    private func broadcastState() async {
-        let payload = entryStatePayload()
-        for session in withLock({ Array(sessions.values) }) where session.isConnected {
-            await respond(session, payload)
         }
     }
 
