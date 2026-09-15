@@ -1,6 +1,6 @@
 # Codex with ChatGPT · Swift for macOS
 
-將 `codex-with-chatgpt` 的 TypeScript CLI 與唯讀 MCP 橋接服務移植為原生 Swift。ChatGPT 負責規劃與審查，Codex 執行程式修改；ChatGPT 透過經授權的 MCP 工具讀取工作區。
+原生 Swift／macOS 工具，讓 Codex session 能開啟或繼續對應的 ChatGPT Quick Chat，並透過 CDP 將經安全規則篩選的工作區檔案附加到對話。專案也提供可選用的唯讀 MCP 橋接、menu bar App，以及 Sparkle 自動更新與 GitHub Release 流程。
 
 **macOS 13 以上，Apple Silicon / Intel。無 Node.js 或 npm。** 這個專案保留原本的 `c2c` 命令列操作模式，並使用 Sparkle 2 提供已簽署 App 的自動更新。
 
@@ -110,8 +110,8 @@ MCP 提供九個工具：`workspace_info`、`list_directory`、`read_file`、`se
 - MCP 沒有寫入、刪除或執行 shell 的工具。CLI 的 `record` 只儲存 Codex 提供的執行證據，不會執行 `--command`。
 - 背景服務採工作區鎖、身分驗證與私有 admin token，狀態不明時不會啟動第二份或向未知 PID 發送終止訊號。
 
-實作對照及驗證範圍見 [docs/migration.md](docs/migration.md)。附帶的 [操作 Skill](skill/SKILL.md) 已改為 Swift/macOS 工作流程，尚未自動安裝至個人 Codex 設定。
+附帶的 [操作 Skill](skill/SKILL.md) 提供 Swift/macOS 工作流程，尚未自動安裝至個人 Codex 設定。
 
-## 原始專案與授權
+## 授權
 
-移植來源為同工作區中的 `codex-with-chatgpt` 0.1.1，保留 [MIT LICENSE](LICENSE)。本專案不是 OpenAI 官方產品。
+本專案採用 [MIT License](LICENSE)，且不是 OpenAI 官方產品。
