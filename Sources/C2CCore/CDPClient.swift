@@ -229,15 +229,17 @@ public final class CDPSession: @unchecked Sendable {
 
     @discardableResult
     public func evaluate(_ expression: String, timeout: TimeInterval = 10) async throws -> [String: Any] {
-        try await send("Runtime.evaluate", ["expression": expression, "returnByValue": true, "awaitPromise": false], timeout: timeout)
+        let result = try await send("Runtime.evaluate", ["expression": expression, "returnByValue": true, "awaitPromise": false], timeout: timeout)
+        if let details = result["exceptionDetails"] as? [String: Any] {
+            let exception = details["exception"] as? [String: Any]
+            throw C2CError((exception?["description"] as? String) ?? (details["text"] as? String) ?? "Evaluation failed")
+        }
+        return result
     }
 
     @discardableResult
     public func evaluateValue(_ expression: String, timeout: TimeInterval = 10) async throws -> Any? {
         let result = try await evaluate(expression, timeout: timeout)
-        if let details = result["exceptionDetails"] as? [String: Any] {
-            throw C2CError((details["text"] as? String) ?? "Evaluation failed")
-        }
         return (result["result"] as? [String: Any])?["value"]
     }
 

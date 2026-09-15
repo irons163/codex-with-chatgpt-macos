@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v18"
+    public static let version = "workspace-attachments-v20"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -95,6 +95,7 @@ public enum EntryPanel {
           var quickChatScanFrame = 0;
           var quickChatCaptureTimer = 0;
           var activeQuickChatKnownConversationIDs = [];
+          var quickChatMissingSince = 0;
           var sessionMenu = null;
           var sessionMenuThreadID = null;
           var sessionMenuBusy = false;
@@ -152,19 +153,66 @@ public enum EntryPanel {
             var key = Object.keys(element).find(function (name) { return name.indexOf("__reactFiber$") === 0; });
             return key ? element[key] : null;
           }
-          function quickChatConversationIDs(panel) {
+          function renderedQuickChatConversationIDs(panel) {
+            var ids = [];
+            Array.from((panel && panel.querySelectorAll("li button")) || []).forEach(function (button) {
+              var fiber = reactFiber(button);
+              for (var depth = 0; fiber && depth < 8; depth++, fiber = fiber.return) {
+                var conversationID = normalizeQuickChatID(fiber.key);
+                if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(conversationID)) continue;
+                if (ids.indexOf(conversationID) < 0) ids.push(conversationID);
+                break;
+              }
+            });
+            return ids;
+          }
+          function quickChatConversationSnapshot(panel) {
             var recent = panel && panel.querySelector('section[aria-labelledby="quick-chat-recent-heading"]');
             var fiber = reactFiber(recent || (panel && panel.querySelector("[data-thread-find-composer]")));
+            var renderedIDs = renderedQuickChatConversationIDs(panel);
+            var bestSnapshot = renderedIDs.length ? renderedIDs : null;
             for (var depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
               var props = fiber.memoizedProps;
               if (!props || !Array.isArray(props.conversations)) continue;
-              return props.conversations.map(function (conversation) {
+              var snapshot = props.conversations.map(function (conversation) {
                 return normalizeQuickChatID(conversation && conversation.conversationId);
               }).filter(function (conversationID) {
                 return conversationID && conversationID.indexOf("local-chatgpt:") !== 0;
               });
+              var combined = renderedIDs.slice();
+              snapshot.forEach(function (conversationID) {
+                if (combined.indexOf(conversationID) < 0) combined.push(conversationID);
+              });
+              if (bestSnapshot === null || combined.length > bestSnapshot.length) bestSnapshot = combined;
             }
-            return [];
+            if (bestSnapshot === null && recent) return [];
+            return bestSnapshot;
+          }
+          function quickChatConversationIDs(panel) {
+            return quickChatConversationSnapshot(panel) || [];
+          }
+          async function refreshQuickChatConversationBaseline(expectedConversationID) {
+            var previousSnapshotKey = null;
+            var stableSnapshotCount = 0;
+            var loaded = await waitForQuickChat(function () {
+              var snapshot = quickChatConversationSnapshot(quickChatPanel());
+              if (snapshot === null || (expectedConversationID && snapshot.indexOf(expectedConversationID) < 0)) {
+                previousSnapshotKey = null;
+                stableSnapshotCount = 0;
+                return null;
+              }
+              var snapshotKey = snapshot.join("|");
+              if (snapshotKey === previousSnapshotKey) stableSnapshotCount += 1;
+              else {
+                previousSnapshotKey = snapshotKey;
+                stableSnapshotCount = 1;
+              }
+              return stableSnapshotCount >= 12 ? { conversationIDs: snapshot } : null;
+            }, 2500);
+            var panel = quickChatPanel();
+            activeQuickChatKnownConversationIDs = loaded
+              ? loaded.conversationIDs
+              : quickChatConversationIDs(panel);
           }
           function renderedConversationButton(panel, conversationID) {
             return Array.from(panel.querySelectorAll("li button")).find(function (button) {
@@ -212,6 +260,7 @@ public enum EntryPanel {
             var panel = quickChatPanel();
             if (panel) {
               quickChatWasOpen = true;
+              quickChatMissingSince = 0;
               if (activeQuickChatThreadID) {
                 if (quickChatLoadFailed(panel)) {
                   return;
@@ -231,9 +280,13 @@ public enum EntryPanel {
                 }
               }
             } else if (quickChatWasOpen && !openingQuickChat) {
-              quickChatWasOpen = false;
-              activeQuickChatThreadID = null;
-              activeQuickChatKnownConversationIDs = [];
+              if (!quickChatMissingSince) quickChatMissingSince = Date.now();
+              if (Date.now() - quickChatMissingSince >= 10000) {
+                quickChatWasOpen = false;
+                quickChatMissingSince = 0;
+                activeQuickChatThreadID = null;
+                activeQuickChatKnownConversationIDs = [];
+              }
             }
           }
           function newQuickChatButton(panel) {
@@ -312,6 +365,9 @@ public enum EntryPanel {
               if (!mappedID) {
                 panel = quickChatPanel() || panel;
                 currentID = currentQuickChatID(panel);
+                var previousConversationID = currentID && currentID.indexOf("local-chatgpt:") !== 0
+                  ? currentID
+                  : "";
                 if (currentID.indexOf("local-chatgpt:") !== 0 ||
                     (previousActiveThreadID && previousActiveThreadID !== threadID)) {
                   var newButton = newQuickChatButton(panel);
@@ -322,6 +378,7 @@ public enum EntryPanel {
                     return nextID && nextID !== currentID ? nextID : null;
                   }, 2500);
                 }
+                await refreshQuickChatConversationBaseline(previousConversationID);
               }
               panel = quickChatPanel() || panel;
               setQuickChatBinding(threadID, currentQuickChatID(panel));
