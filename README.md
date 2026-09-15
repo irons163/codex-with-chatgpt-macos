@@ -1,23 +1,24 @@
 # Codex with ChatGPT · Swift for macOS
 
-原生 Swift／macOS 工具，讓 Codex session 能開啟或繼續對應的 ChatGPT Quick Chat，並透過 CDP 將經安全規則篩選的工作區檔案附加到對話。專案提供 menu bar App、`c2c` 命令列工具，以及 Sparkle 自動更新與 GitHub Release 流程。
+讓 Codex 與 ChatGPT Quick Chat 接得更順的 macOS App。
+
+一般流程是先在 Quick Chat 討論，再按「新增至 Codex」執行；但 ChatGPT 與 Codex 是兩套不同的系統，之後要回到剛才的對話，通常得自己重新翻找。這個 App 會在每個 Codex session 旁加入操作按鈕，第一次按可開啟 Quick Chat，聊過後再按則會回到同一串對話。
+
+需要讓 ChatGPT 看專案時，也能從同一入口附加該 session 工作目錄中的檔案。檔案太多會自動分批，敏感內容可透過 `.c2cignore` 排除。開啟 App 後即會自動注入；不使用這些按鈕時，原本的 Codex／ChatGPT 操作方式不受影響。
+
+![Codex session 的 Quick Chat、專案附件與排除規則選單](docs/images/session-quick-chat-actions.png)
 
 **macOS 13 以上，Apple Silicon / Intel。無 Node.js 或 npm。** App 與 CLI 都只在本機透過 CDP 操作桌面版介面，不會啟動 HTTP server、OAuth、MCP 或公開連線；Sparkle 2 負責已簽署 App 的自動更新。
 
-## 建置與執行
+## 下載與安裝
 
-需要 Xcode Command Line Tools（`xcode-select --install`）以及 Swift 5.9 以上。通用架構建置使用完整 Xcode 的建置系統。
+目前版本：**v0.1.2**
 
-```sh
-swift build
-swift test
-./scripts/build.sh                # dist/c2c，本機架構的 release 執行檔
-./scripts/build.sh --universal    # Apple Silicon + Intel universal binary
-./scripts/package-app.sh          # dist/CodexWithChatGPT.app（本機 ad-hoc 簽署）
-./dist/c2c --help
-```
+- [下載 Apple Silicon 版（M1／M2／M3／M4）](https://github.com/irons163/codex-with-chatgpt-macos/releases/download/v0.1.2/CodexWithChatGPT-0.1.2-apple-silicon.dmg)
+- [下載 Intel 版](https://github.com/irons163/codex-with-chatgpt-macos/releases/download/v0.1.2/CodexWithChatGPT-0.1.2-intel.dmg)
+- [查看最新版與更新紀錄](https://github.com/irons163/codex-with-chatgpt-macos/releases/latest)
 
-正式 release 由 GitHub Actions 建置 Apple Silicon 與 Intel DMG、Developer ID 簽署、Apple notarization，並產生 Sparkle Ed25519 appcast。設定與發佈步驟見 [安全更新與 Release](docs/UPDATES.md)。
+開啟 DMG，將 `CodexWithChatGPT.app` 拖進 `/Applications`，再直接啟動即可。App 已經過 Developer ID 簽署與 Apple notarization，之後可透過內建的 Sparkle 檢查更新。
 
 ## App 使用方式
 
