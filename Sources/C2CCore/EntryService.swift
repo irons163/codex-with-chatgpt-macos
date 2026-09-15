@@ -21,7 +21,14 @@ public final class EntryService {
         .sort((left, right) => right.rect.x - left.rect.x);
       const composer = candidates[0];
       if (!composer) return null;
-      return composer.root.querySelector('[data-composer-attachments-row]') !== null;
+      const attachmentContainer = composer.root.querySelector(
+        '[data-composer-attachments], [data-composer-attachments-row]'
+      );
+      const stagedFileCount = composer.input.files ? composer.input.files.length : 0;
+      if (stagedFileCount > 0) return true;
+      if (!attachmentContainer) return false;
+      return attachmentContainer.querySelector('[data-composer-attachment-pill="true"]') !== null ||
+        attachmentContainer.children.length > 0;
     })()
     """
 

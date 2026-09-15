@@ -217,7 +217,11 @@ final class EntryTests: XCTestCase {
         XCTAssertTrue(expression.contains("!input.hasAttribute('accept')"))
         XCTAssertTrue(expression.contains("treeDistance"))
         XCTAssertFalse(expression.contains("Input.dispatchDragEvent"))
-        XCTAssertTrue(EntryService.chatGPTComposerHasAttachmentsExpression.contains("data-composer-attachments-row"))
+        let attachmentCheck = EntryService.chatGPTComposerHasAttachmentsExpression
+        XCTAssertTrue(attachmentCheck.contains("data-composer-attachments]"))
+        XCTAssertTrue(attachmentCheck.contains("data-composer-attachments-row"))
+        XCTAssertTrue(attachmentCheck.contains("data-composer-attachment-pill"))
+        XCTAssertTrue(attachmentCheck.contains("composer.input.files.length"))
     }
 
 }
