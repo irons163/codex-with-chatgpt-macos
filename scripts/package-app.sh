@@ -10,6 +10,7 @@ BUILD_VERSION="${BUILD_VERSION:-}"
 APP_PATH="$PROJECT_ROOT/dist/CodexWithChatGPT.app"
 STAGING_PATH="$PROJECT_ROOT/dist/.CodexWithChatGPT.app.staging"
 INFO_PLIST_PATH="$STAGING_PATH/Contents/Info.plist"
+APP_ICON_PATH="$STAGING_PATH/Contents/Resources/AppIcon.icns"
 APP_BINARY_PATH="$STAGING_PATH/Contents/MacOS/CodexWithChatGPT"
 CLI_PATH="$STAGING_PATH/Contents/Helpers/c2c"
 SPARKLE_FRAMEWORK_PATH="$STAGING_PATH/Contents/Frameworks/Sparkle.framework"
@@ -57,7 +58,8 @@ for required in \
   "$APP_BINARY_SOURCE" \
   "$CLI_SOURCE" \
   "$SPARKLE_FRAMEWORK_SOURCE" \
-  "$PROJECT_ROOT/Packaging/Info.plist"; do
+  "$PROJECT_ROOT/Packaging/Info.plist" \
+  "$PROJECT_ROOT/Packaging/AppIcon.icns"; do
   if [[ ! -e "$required" ]]; then
     echo "Required build product is missing: $required" >&2
     exit 1
@@ -74,6 +76,7 @@ mkdir -p \
 ditto "$APP_BINARY_SOURCE" "$APP_BINARY_PATH"
 ditto "$CLI_SOURCE" "$CLI_PATH"
 ditto "$PROJECT_ROOT/Packaging/Info.plist" "$INFO_PLIST_PATH"
+ditto "$PROJECT_ROOT/Packaging/AppIcon.icns" "$APP_ICON_PATH"
 ditto "$SPARKLE_FRAMEWORK_SOURCE" "$SPARKLE_FRAMEWORK_PATH"
 chmod 755 "$APP_BINARY_PATH" "$CLI_PATH"
 

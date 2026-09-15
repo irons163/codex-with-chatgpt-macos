@@ -10,6 +10,8 @@
     <string>CodexWithChatGPT</string>
     <key>CFBundleIdentifier</key>
     <string>com.phil.codex-with-chatgpt-macos</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleName</key>
     <string>Codex with ChatGPT</string>
     <key>CFBundlePackageType</key>
