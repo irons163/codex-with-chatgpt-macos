@@ -82,8 +82,9 @@ jobs:
           TAG_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
           [[ "$SOURCE_SHA" == "$TAG_SHA" ]] \
             || { echo "Checkout does not match immutable tag." >&2; exit 1; }
-          git fetch --no-tags origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
-          git merge-base --is-ancestor "$SOURCE_SHA" "origin/$DEFAULT_BRANCH" \
+          DEFAULT_BRANCH_SHA="$(gh api "repos/${UPDATE_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq '.sha')"
+          COMPARE_STATUS="$(gh api "repos/${UPDATE_REPOSITORY}/compare/${SOURCE_SHA}...${DEFAULT_BRANCH_SHA}" --jq '.status')"
+          [[ "$COMPARE_STATUS" == ahead || "$COMPARE_STATUS" == identical ]] \
             || { echo "Release source is not on $DEFAULT_BRANCH." >&2; exit 1; }
 
           RELEASE_JSON="$(gh api "repos/${UPDATE_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
