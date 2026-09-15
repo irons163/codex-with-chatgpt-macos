@@ -21,7 +21,7 @@ swift test
 
 ## App 使用方式
 
-將 `CodexWithChatGPT.app` 放進 `/Applications` 後開啟，選擇工作目錄並按「啟動」。App 會常駐 menu bar，執行與 `c2c entry --workspace ...` 相同的 CDP 注入；也可選擇 Stable／Beta 更新頻道及手動檢查更新。App bundle 內仍包含 `Contents/Helpers/c2c`，終端機流程不受影響。
+將 `CodexWithChatGPT.app` 放進 `/Applications` 後直接開啟，App 會自動在背景啟動 CDP 注入並常駐 menu bar，不必先選擇全域工作目錄。每個 Codex session 的操作入口會使用該 session 自己的 `displayCwd`。Menu bar 的精簡選單提供狀態、重新注入、檢查 Stable 更新與結束；App bundle 內仍包含 `Contents/Helpers/c2c`，終端機流程不受影響。
 
 可在 Xcode 直接開啟 `Package.swift`。若要放進 PATH：
 
