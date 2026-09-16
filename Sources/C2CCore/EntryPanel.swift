@@ -2,7 +2,7 @@ import Foundation
 
 public enum EntryPanel {
     public static let marker = "__c2cWorkspaceReaderInstalled"
-    public static let version = "workspace-attachments-v20"
+    public static let version = "workspace-attachments-v21"
     public static let bindingName = "c2cWorkspaceReader"
     public static let resultFunction = "__c2cEntryResult"
     public static let hostID = "c2c-entry-host"
@@ -21,6 +21,7 @@ public enum EntryPanel {
 
     public static func installScript(workspaceName: String) -> String {
         let workspace = jsonLiteral(workspaceName)
+        let localizations = AppLocalization.javascriptCatalog
         return """
         (function () {
           var MARKER = "\(marker)";
@@ -29,6 +30,81 @@ public enum EntryPanel {
           var RESULT = "\(resultFunction)";
           var QUICK_CHAT_CLEANUP = "\(quickChatCleanupFunction)";
           var QUICK_CHAT_STORAGE = "\(quickChatStorageKey)";
+          var LOCALIZATIONS = \(localizations);
+          function supportedLanguage(value) {
+            var language = String(value || "").trim().replace(/_/g, "-").toLowerCase();
+            if (!language) return null;
+            if (language === "en" || language.indexOf("en-") === 0) return "en";
+            if (language === "fr" || language.indexOf("fr-") === 0) return "fr";
+            if (language === "es" || language.indexOf("es-") === 0) return "es";
+            if (language === "ja" || language.indexOf("ja-") === 0) return "ja";
+            if (language === "ko" || language.indexOf("ko-") === 0) return "ko";
+            if (language === "zh" || language.indexOf("zh-") === 0) {
+              return /hant|-tw|-hk|-mo/.test(language) ? "zh-TW" : "zh-CN";
+            }
+            return null;
+          }
+          function languageFromStoredValue(value) {
+            var direct = supportedLanguage(String(value || "").replace(/^[\"']|[\"']$/g, ""));
+            if (direct) return direct;
+            try {
+              var parsed = JSON.parse(String(value || ""));
+              if (parsed && typeof parsed === "object") {
+                return supportedLanguage(parsed.locale || parsed.language || parsed.lang);
+              }
+            } catch (error) {}
+            return null;
+          }
+          function detectCodexLanguage() {
+            var root = document.documentElement;
+            var explicit = [
+              root && root.getAttribute("lang"),
+              document.body && document.body.getAttribute("lang"),
+              root && root.getAttribute("data-locale"),
+              root && root.getAttribute("data-language")
+            ].filter(Boolean);
+            if (explicit.length) return supportedLanguage(explicit[0]) || "en";
+            var storedValue = null;
+            try {
+              ["locale", "language", "lang", "i18nextLng"].some(function (key) {
+                var value = localStorage.getItem(key);
+                if (value === null) return false;
+                storedValue = value;
+                return true;
+              });
+              if (storedValue === null) {
+                Object.keys(localStorage).some(function (key) {
+                  if (!/(^|[._-])(locale|language|lang|i18n)([._-]|$)/i.test(key)) return false;
+                  storedValue = localStorage.getItem(key);
+                  return storedValue !== null;
+                });
+              }
+            } catch (error) {}
+            if (storedValue !== null) return languageFromStoredValue(storedValue) || "en";
+            return supportedLanguage((navigator.languages && navigator.languages[0]) || navigator.language) || "en";
+          }
+          var LANGUAGE = detectCodexLanguage();
+          function text(key, replacements) {
+            var table = LOCALIZATIONS[LANGUAGE] || LOCALIZATIONS.en || {};
+            var fallback = LOCALIZATIONS.en || {};
+            var value = String(table[key] || fallback[key] || key);
+            Object.keys(replacements || {}).forEach(function (name) {
+              value = value.split("{" + name + "}").join(String(replacements[name]));
+            });
+            return value;
+          }
+          function reportLanguage() {
+            if (typeof window[BINDING] !== "function") return;
+            try { window[BINDING](JSON.stringify({ action: "set-locale", locale: LANGUAGE })); } catch (error) {}
+          }
+          function refreshLanguage() {
+            var nextLanguage = detectCodexLanguage();
+            if (nextLanguage === LANGUAGE) return false;
+            LANGUAGE = nextLanguage;
+            reportLanguage();
+            if (sessionMenu) syncSessionMenu();
+            return true;
+          }
           var previousHost = document.getElementById("\(hostID)");
           if (window[MARKER] === VERSION && previousHost) return "already";
           if (typeof window[QUICK_CHAT_CLEANUP] === "function") {
@@ -114,7 +190,7 @@ public enum EntryPanel {
             if (activeQuickChatThreadID === threadID) activeQuickChatThreadID = null;
             saveQuickChatBindings();
             scheduleQuickChatScan();
-            showToast("已解除 Quick Chat 綁定");
+            showToast(text("unlinkedQuickChat"));
           }
           function quickChatPanel() {
             return document.querySelector('section[data-pip-obstacle="quick-chat"][data-state="open"]');
@@ -125,15 +201,23 @@ public enum EntryPanel {
           }
           function quickChatLoadFailed(panel) {
             var text = String((panel && panel.innerText) || "").toLowerCase();
-            return text.indexOf("無法載入此 chatgpt 對話") >= 0 ||
-              text.indexOf("unable to load this chatgpt conversation") >= 0 ||
-              text.indexOf("couldn't load this chatgpt conversation") >= 0;
+            return [
+              "無法載入此 chatgpt 對話", "无法加载此 chatgpt 对话",
+              "unable to load this chatgpt conversation", "couldn't load this chatgpt conversation",
+              "impossible de charger cette conversation chatgpt",
+              "no se puede cargar esta conversación de chatgpt",
+              "この chatgpt の会話を読み込めません", "이 chatgpt 대화를 불러올 수 없습니다"
+            ].some(function (message) { return text.indexOf(message) >= 0; });
           }
           function nativeQuickChatButton() {
             return Array.from(document.querySelectorAll("button")).find(function (button) {
               if (button.hasAttribute("data-c2c-quick-chat-button")) return false;
               var label = (button.getAttribute("aria-label") || "").toLowerCase();
-              return label === "快速對話" || label === "快速聊天" || label === "quick chat";
+              return [
+                "快速對話", "快速聊天", "快速对话", "快速聊天", "quick chat",
+                "discussion rapide", "chat rapide", "chat rápido", "conversación rápida",
+                "クイックチャット", "빠른 채팅", "빠른 대화"
+              ].indexOf(label) >= 0;
             }) || null;
           }
           function waitForQuickChat(test, timeout) {
@@ -292,7 +376,11 @@ public enum EntryPanel {
           function newQuickChatButton(panel) {
             return Array.from(panel.querySelectorAll("button")).find(function (button) {
               var label = (button.getAttribute("aria-label") || "").toLowerCase();
-              return label === "新對話" || label === "new chat";
+              return [
+                "新對話", "新聊天", "新对话", "新聊天", "new chat",
+                "nouvelle conversation", "nouveau chat", "nueva conversación", "nuevo chat",
+                "新しいチャット", "新規チャット", "새 채팅", "새 대화"
+              ].indexOf(label) >= 0;
             }) || null;
           }
           async function openQuickChatForThread(row) {
@@ -313,11 +401,11 @@ public enum EntryPanel {
               var panel = quickChatPanel();
               if (!panel) {
                 var nativeButton = nativeQuickChatButton();
-                if (!nativeButton) throw new Error("找不到內建 Quick Chat 入口");
+                if (!nativeButton) throw new Error(text("quickChatEntryMissing"));
                 nativeButton.click();
                 panel = await waitForQuickChat(quickChatPanel, 2500);
               }
-              if (!panel) throw new Error("Quick Chat 未開啟");
+              if (!panel) throw new Error(text("quickChatNotOpen"));
               activeQuickChatKnownConversationIDs = quickChatConversationIDs(panel);
               activeQuickChatThreadID = threadID;
 
@@ -332,7 +420,7 @@ public enum EntryPanel {
                 }, 2500);
                 panel = quickChatPanel() || panel;
                 currentID = currentQuickChatID(panel);
-                showToast("已離開錯誤畫面，正在重試原本的 Quick Chat 綁定。");
+                showToast(text("retryingBinding"));
               }
               if (mappedID && currentID !== mappedID) {
                 var createButton = newQuickChatButton(panel);
@@ -346,7 +434,7 @@ public enum EntryPanel {
                 }
                 var threadTitle = row.getAttribute("data-app-action-sidebar-thread-title") || "Quick Chat";
                 if (!selectQuickChatConversation(panel, mappedID, threadTitle)) {
-                  throw new Error("原本的 Quick Chat 對話目前不在可用清單；綁定已保留，可稍後重試或按 × 解綁");
+                  throw new Error(text("boundChatUnavailable"));
                 } else {
                   var resumed = await waitForQuickChat(function () {
                     var nextPanel = quickChatPanel();
@@ -357,7 +445,7 @@ public enum EntryPanel {
                     panel = quickChatPanel() || panel;
                     var resetButton = newQuickChatButton(panel);
                     if (resetButton) resetButton.click();
-                    throw new Error("原本的 Quick Chat 對話暫時無法載入；綁定已保留，可稍後重試或按 × 解綁");
+                    throw new Error(text("boundChatLoadFailed"));
                   }
                 }
               }
@@ -371,7 +459,7 @@ public enum EntryPanel {
                 if (currentID.indexOf("local-chatgpt:") !== 0 ||
                     (previousActiveThreadID && previousActiveThreadID !== threadID)) {
                   var newButton = newQuickChatButton(panel);
-                  if (!newButton) throw new Error("找不到 Quick Chat 的新對話按鈕");
+                  if (!newButton) throw new Error(text("newChatButtonMissing"));
                   newButton.click();
                   await waitForQuickChat(function () {
                     var nextID = currentQuickChatID(quickChatPanel());
@@ -387,7 +475,7 @@ public enum EntryPanel {
               succeeded = true;
             } catch (error) {
               console.warn("c2c Quick Chat:", error);
-              showToast(error && error.message ? error.message : "Quick Chat 開啟失敗");
+              showToast(error && error.message ? error.message : text("quickChatOpenFailed"));
             } finally {
               openingQuickChat = false;
               captureActiveQuickChat();
@@ -416,8 +504,10 @@ public enum EntryPanel {
           }
           function attachmentActionLabel() {
             return attachmentState.hasPendingBatch && attachmentState.threadID === sessionMenuThreadID
-              ? "送出後附加下一批（剩 " + (attachmentState.remainingCount || 0) + " 個）"
-              : "附加「" + (sessionMenuWorkspace ? sessionMenuWorkspace.label : "此 session") + "」專案檔案";
+              ? text("attachNextBatch", { count: attachmentState.remainingCount || 0 })
+              : text("attachProject", {
+                  workspace: sessionMenuWorkspace ? sessionMenuWorkspace.label : text("sessionFallback")
+                });
           }
           function closeSessionMenu() {
             if (sessionMenu) sessionMenu.remove();
@@ -429,12 +519,18 @@ public enum EntryPanel {
             if (!sessionMenu) return;
             var workspace = sessionMenu.querySelector("[data-c2c-session-menu-workspace]");
             if (workspace) workspace.textContent = sessionMenuWorkspace
-              ? "工作目錄：" + sessionMenuWorkspace.path
-              : "找不到這個 session 的工作目錄";
+              ? text("workspacePath", { path: sessionMenuWorkspace.path })
+              : text("workspaceMissing");
+            var open = sessionMenu.querySelector('[data-c2c-session-action="open"]');
+            if (open) open.textContent = quickChatBindings[sessionMenuThreadID]
+              ? text("continueQuickChat")
+              : text("openNewQuickChat");
             var attach = sessionMenu.querySelector('[data-c2c-session-action="attach"]');
             if (attach) attach.textContent = attachmentActionLabel();
             var ignore = sessionMenu.querySelector('[data-c2c-session-action="ignore"]');
-            if (ignore) ignore.textContent = "編輯「" + (sessionMenuWorkspace ? sessionMenuWorkspace.label : "此 session") + "」排除規則…";
+            if (ignore) ignore.textContent = text("editExclusions", {
+              workspace: sessionMenuWorkspace ? sessionMenuWorkspace.label : text("sessionFallback")
+            });
             var statusNode = sessionMenu.querySelector("[data-c2c-session-menu-status]");
             if (statusNode) statusNode.textContent = sessionMenuStatus;
             sessionMenu.querySelectorAll("button").forEach(function (button) {
@@ -463,13 +559,13 @@ public enum EntryPanel {
             menu.setAttribute("data-c2c-session-menu", "true");
             var title = document.createElement("div");
             title.setAttribute("data-c2c-session-menu-title", "true");
-            title.textContent = row.getAttribute("data-app-action-sidebar-thread-title") || "這個 session";
+            title.textContent = row.getAttribute("data-app-action-sidebar-thread-title") || text("sessionFallback");
             var workspace = document.createElement("div");
             workspace.setAttribute("data-c2c-session-menu-workspace", "true");
             var openButton = document.createElement("button");
             openButton.type = "button";
             openButton.setAttribute("data-c2c-session-action", "open");
-            openButton.textContent = quickChatBindings[threadID] ? "繼續 Quick Chat" : "開啟新的 Quick Chat";
+            openButton.textContent = quickChatBindings[threadID] ? text("continueQuickChat") : text("openNewQuickChat");
             openButton.addEventListener("click", async function () {
               closeSessionMenu();
               await openQuickChatForThread(row);
@@ -532,11 +628,11 @@ public enum EntryPanel {
               });
               row.appendChild(button);
             }
-            var title = row.getAttribute("data-app-action-sidebar-thread-title") || "這個 session";
+            var title = row.getAttribute("data-app-action-sidebar-thread-title") || text("sessionFallback");
             var hasChat = !!quickChatBindings[threadID];
             row.setAttribute("data-c2c-quick-chat-state", hasChat ? "bound" : "unbound");
             button.setAttribute("data-c2c-has-chat", hasChat ? "true" : "false");
-            button.setAttribute("aria-label", "開啟「" + title + "」的 ChatGPT 專案選單");
+            button.setAttribute("aria-label", text("openProjectMenu", { title: title }));
             button.title = button.getAttribute("aria-label");
             var unbindButton = row.querySelector(':scope > [data-c2c-quick-chat-unbind-button="true"]');
             if (hasChat && !unbindButton) {
@@ -556,11 +652,12 @@ public enum EntryPanel {
               unbindButton = null;
             }
             if (unbindButton) {
-              unbindButton.setAttribute("aria-label", "解除「" + title + "」的 Quick Chat 綁定");
+              unbindButton.setAttribute("aria-label", text("unlinkQuickChat", { title: title }));
               unbindButton.title = unbindButton.getAttribute("aria-label");
             }
           }
           function scanQuickChatRows() {
+            refreshLanguage();
             document.querySelectorAll("[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-id]").forEach(installQuickChatButton);
             captureActiveQuickChat();
           }
@@ -579,7 +676,10 @@ public enum EntryPanel {
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ["data-above-composer-conversation-id", "data-app-action-sidebar-thread-selected"]
+            attributeFilter: [
+              "data-above-composer-conversation-id", "data-app-action-sidebar-thread-selected",
+              "lang", "data-locale", "data-language"
+            ]
           });
           quickChatCaptureTimer = window.setInterval(captureActiveQuickChat, 500);
           window[QUICK_CHAT_CLEANUP] = function () {
@@ -624,23 +724,32 @@ public enum EntryPanel {
           }
           function callNative(action, silent, threadID, workspacePath) {
             if (typeof window[BINDING] !== "function") {
-              showToast("工作目錄連線尚未就緒，請確認 c2c 仍在執行。");
+              showToast(text("connectionNotReady"));
               return;
             }
             setBusy(true);
-            if (!silent) setStatus("處理中…");
+            if (!silent) setStatus(text("processing"));
             try { window[BINDING](JSON.stringify({
               action: action,
+              locale: LANGUAGE,
               threadID: threadID || "",
               workspacePath: workspacePath || ""
             })); }
-            catch (error) { setBusy(false); setStatus(""); showToast("無法呼叫 c2c：" + error); }
+            catch (error) {
+              setBusy(false);
+              setStatus("");
+              showToast(text("nativeCallFailed", { error: error }));
+            }
           }
           window[RESULT] = function (payloadText) {
             var payload = null;
             try { payload = JSON.parse(String(payloadText)); } catch (error) {}
             setBusy(false);
-            if (!payload || typeof payload !== "object") { setStatus(""); showToast("c2c 回應無法解析。"); return; }
+            if (!payload || typeof payload !== "object") {
+              setStatus("");
+              showToast(text("invalidResponse"));
+              return;
+            }
             if (payload.ok === true) {
               if (payload.action === "state") {
                 updateQueueState(payload);
@@ -648,36 +757,40 @@ public enum EntryPanel {
                 attachmentState.hasPendingBatch = false;
                 attachmentState.remainingCount = 0;
                 attachmentState.threadID = "";
-                setStatus("已開啟 .c2cignore");
-                showToast("排除規則已用文字編輯器開啟；儲存後，下次附加會自動重新載入。");
+                setStatus(text("ignoreOpenedStatus"));
+                showToast(text("ignoreOpenedMessage"));
               } else if (payload.action === "attach-workspace-files") {
                 var count = payload.count || 0;
                 var batchNumber = payload.batchNumber || 1;
                 var batchCount = payload.batchCount || 1;
                 var remainingCount = payload.remainingCount || 0;
-                setStatus("已附加第 " + batchNumber + "/" + batchCount + " 批（" + count + " 個）");
+                var batchValues = { batch: batchNumber, total: batchCount, count: count };
+                setStatus(text("batchAttachedStatus", batchValues));
                 if (payload.hasMore === true) {
                   attachmentState.hasPendingBatch = true;
                   attachmentState.remainingCount = remainingCount;
                   attachmentState.threadID = payload.threadID || "";
-                  showToast("第 " + batchNumber + "/" + batchCount + " 批已附加。請先送出這則訊息，再按下一批。" +
-                    (payload.incomplete === true ? " 部分檔案因無法安全讀取而未列入。" : ""));
+                  showToast(text("batchMoreMessage", batchValues) +
+                    (payload.incomplete === true ? text("skippedFilesSuffix") : ""));
                 } else {
                   attachmentState.hasPendingBatch = false;
                   attachmentState.remainingCount = 0;
                   attachmentState.threadID = "";
                   showToast(payload.incomplete === true
-                    ? "可安全讀取的批次已完成；部分檔案未列入。"
-                    : "第 " + batchNumber + "/" + batchCount + " 批已附加；全部批次完成。");
+                    ? text("safeBatchesComplete")
+                    : text("allBatchesComplete", batchValues));
                 }
                 syncSessionMenu();
               }
             } else if (payload.cancelled === true) {
-              setStatus(""); showToast("已取消。");
+              setStatus(""); showToast(text("cancelled"));
             } else {
-              setStatus(""); showToast(payload.error || "讀取工作目錄失敗。");
+              setStatus("");
+              if (payload.error) console.warn("c2c:", payload.error);
+              showToast(payload.errorKey ? text(payload.errorKey) : text("workspaceReadFailed"));
             }
           };
+          reportLanguage();
           return "installed";
         })();
         """

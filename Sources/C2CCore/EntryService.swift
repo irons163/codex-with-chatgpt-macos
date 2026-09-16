@@ -6,6 +6,7 @@ import Darwin
 /// that queue through ChatGPT's file input.
 public final class EntryService {
     static let chatGPTMaximumAttachmentFiles = 20
+    public static let localeEventPrefix = "C2C_LOCALE:"
 
     static let chatGPTComposerHasAttachmentsExpression = """
     (() => {
@@ -170,6 +171,9 @@ public final class EntryService {
     private func handleBinding(session: CDPSession, name: String, payload: [String: Any]) {
         guard name == EntryPanel.bindingName else { return }
         switch payload["action"] as? String {
+        case "set-locale":
+            let language = AppLanguage.matchingCodexIdentifier(payload["locale"] as? String)
+            log(Self.localeEventPrefix + language.rawValue)
         case "get-state":
             let threadID = payload["threadID"] as? String ?? ""
             let workspacePath = payload["workspacePath"] as? String ?? ""
@@ -183,8 +187,15 @@ public final class EntryService {
             let workspacePath = payload["workspacePath"] as? String ?? ""
             Task { [weak self] in await self?.performAttachWorkspaceFiles(session: session, threadID: threadID, workspacePath: workspacePath) }
         default:
-            Task { await respond(session, ["ok": false, "error": "Unknown action"]) }
+            Task { await respond(session, failurePayload(C2CError("Unknown action"))) }
         }
+    }
+
+    private func failurePayload(
+        _ error: Error,
+        key: AppTextKey = .workspaceReadFailed
+    ) -> [String: Any] {
+        ["ok": false, "error": error.localizedDescription, "errorKey": key.rawValue]
     }
 
     private func performGetState(session: CDPSession, threadID: String, workspacePath: String) async {
@@ -192,7 +203,7 @@ public final class EntryService {
             let selected = try requestedWorkspace(path: workspacePath)
             await respond(session, entryStatePayload(threadID: threadID, workspace: selected))
         } catch {
-            await respond(session, ["ok": false, "error": error.localizedDescription])
+            await respond(session, failurePayload(error))
         }
     }
 
@@ -203,7 +214,7 @@ public final class EntryService {
             return busy
         }
         guard !wasBusy else {
-            await respond(session, ["ok": false, "error": "附件或目錄操作仍在處理中，請稍候。"])
+            await respond(session, failurePayload(C2CError("附件或目錄操作仍在處理中，請稍候。")))
             return
         }
         defer { withLock { pickerBusy = false } }
@@ -224,7 +235,7 @@ public final class EntryService {
                 "path": policyURL.path
             ])
         } catch {
-            await respond(session, ["ok": false, "error": error.localizedDescription])
+            await respond(session, failurePayload(error))
         }
     }
 
@@ -346,7 +357,7 @@ public final class EntryService {
 
     private func performAttachWorkspaceFiles(session: CDPSession, threadID: String, workspacePath: String) async {
         guard !threadID.isEmpty else {
-            await respond(session, ["ok": false, "error": "找不到發起附件操作的 session。"])
+            await respond(session, failurePayload(C2CError("找不到發起附件操作的 session。")))
             return
         }
         let request = withLock { () -> (busy: Bool, queue: AttachmentQueueSnapshot?) in
@@ -355,7 +366,7 @@ public final class EntryService {
             return (busy, attachmentQueues[threadID])
         }
         guard !request.busy else {
-            await respond(session, ["ok": false, "error": "附件仍在處理中，請稍候。"])
+            await respond(session, failurePayload(C2CError("附件仍在處理中，請稍候。")))
             return
         }
         defer { withLock { attachmentBusy = false } }
@@ -407,7 +418,7 @@ public final class EntryService {
                 "truncated": batch.truncated
             ])
         } catch {
-            await respond(session, ["ok": false, "error": error.localizedDescription])
+            await respond(session, failurePayload(error))
         }
     }
 

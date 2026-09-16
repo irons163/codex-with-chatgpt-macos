@@ -64,11 +64,22 @@ extension UpdateController: SPUUpdaterDelegate {
 @MainActor
 private final class InjectionModel: ObservableObject {
     @Published private(set) var isRunning = false
-    @Published private(set) var status = "正在啟動…"
+    @Published private(set) var language = AppLanguage.english
+    @Published private(set) var statusKey = AppTextKey.starting
+    @Published private(set) var statusReplacements: [String: String] = [:]
 
     private var entryProcess: Process?
     private var outputPipe: Pipe?
+    private var outputBuffer = ""
     private var runID = UUID()
+
+    var status: String {
+        AppLocalization.text(statusKey, language: language, replacements: statusReplacements)
+    }
+
+    func text(_ key: AppTextKey) -> String {
+        AppLocalization.text(key, language: language)
+    }
 
     init() {
         Task { @MainActor [weak self] in
@@ -96,12 +107,9 @@ private final class InjectionModel: ObservableObject {
                     handle.readabilityHandler = nil
                     return
                 }
-                let lines = String(decoding: data, as: UTF8.self)
-                    .split(whereSeparator: \Character.isNewline)
-                guard let last = lines.last else { return }
                 Task { @MainActor in
                     guard self?.runID == id else { return }
-                    self?.status = String(last)
+                    self?.consumeOutput(String(decoding: data, as: UTF8.self))
                 }
             }
             process.terminationHandler = { [weak self] process in
@@ -111,20 +119,39 @@ private final class InjectionModel: ObservableObject {
                     self?.outputPipe?.fileHandleForReading.readabilityHandler = nil
                     self?.outputPipe = nil
                     self?.isRunning = false
-                    self?.status = process.terminationStatus == 0
-                        ? "已停止"
-                        : "執行失敗（exit \(process.terminationStatus)）"
+                    self?.setStatus(
+                        process.terminationStatus == 0 ? .stopped : .processFailed,
+                        replacements: ["code": String(process.terminationStatus)]
+                    )
                 }
             }
             try process.run()
             entryProcess = process
             outputPipe = pipe
             isRunning = true
-            status = "正在注入 Codex…"
+            setStatus(.injecting)
         } catch {
             isRunning = false
-            status = "啟動失敗：\(error.localizedDescription)"
+            setStatus(.startFailed, replacements: ["error": error.localizedDescription])
         }
+    }
+
+    private func consumeOutput(_ chunk: String) {
+        outputBuffer += chunk
+        let lines = outputBuffer.split(separator: "\n", omittingEmptySubsequences: false)
+        outputBuffer = String(lines.last ?? "")
+        for line in lines.dropLast() {
+            let value = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard value.hasPrefix(EntryService.localeEventPrefix) else { continue }
+            let identifier = String(value.dropFirst(EntryService.localeEventPrefix.count))
+            language = AppLanguage.matchingCodexIdentifier(identifier)
+            setStatus(.injected)
+        }
+    }
+
+    private func setStatus(_ key: AppTextKey, replacements: [String: String] = [:]) {
+        statusKey = key
+        statusReplacements = replacements
     }
 
     func stop() {
@@ -135,12 +162,13 @@ private final class InjectionModel: ObservableObject {
         runID = UUID()
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         outputPipe = nil
+        outputBuffer = ""
         if let entryProcess, entryProcess.isRunning {
             entryProcess.terminate()
         }
         entryProcess = nil
         isRunning = false
-        if updateStatus { status = "已停止" }
+        if updateStatus { setStatus(.stopped) }
     }
 
     private func runtimeWorkspace() throws -> Workspace {
@@ -169,7 +197,7 @@ private final class InjectionModel: ObservableObject {
                 return sibling
             }
         }
-        throw C2CError("找不到 c2c helper，請使用 scripts/package-app.sh 建立完整 App。")
+        throw C2CError(AppLocalization.text(.helperMissing, language: language))
     }
 }
 
@@ -182,14 +210,14 @@ private struct CodexWithChatGPTApp: App {
         MenuBarExtra("Codex with ChatGPT", systemImage: "folder.badge.gearshape") {
             Text(injection.status)
             Divider()
-            Button(injection.isRunning ? "重新注入" : "啟動注入") {
+            Button(injection.text(injection.isRunning ? .reinject : .startInjection)) {
                 injection.start()
             }
-            Button("檢查更新…") {
+            Button(injection.text(.checkUpdates)) {
                 updates.checkForUpdates()
             }
             Divider()
-            Button("結束") {
+            Button(injection.text(.quit)) {
                 injection.stop()
                 NSApplication.shared.terminate(nil)
             }
